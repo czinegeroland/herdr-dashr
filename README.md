@@ -26,7 +26,7 @@ agent underneath to reshape it.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.1.0, the first public release. All but one PRD requirement verified (the first npm publish comes with this release), most by an end-to-end
+**Status:** v0.1.0, the first public release, on GitHub and npm. Every PRD requirement verified, most by an end-to-end
 suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
 
 ## Install

@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-26T20:00:00Z |
+| Last updated | 2026-09-26T22:10:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -272,7 +272,7 @@ Crates:
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
 | DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Verified | Release v0.1.0 by `.github/workflows/release.yml`: 4 targets, each with a `.sha256` |
-| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | `.github/workflows/npm-publish.yml`, `scripts/build-npm-packages.mjs`, `npm/dashr/bin.js`; `crates/dashr-cli/tests/distribution.rs`; publish, idempotent re-publish, `install.sh` and `npx` verified against a local registry; the first real publish of v0.1.0 was refused by npm (E404, a token permission error, OQ-008); the release and packages built and verified |
+| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Verified | v0.1.0 published by `.github/workflows/npm-publish.yml`: `herdr-dashr` and its four platform packages at 0.1.0 on registry.npmjs.org, `latest` tag, built by `scripts/build-npm-packages.mjs` from the checksummed release archives; `npx herdr-dashr@0.1.0 --version` prints `dashr 0.1.0`; `crates/dashr-cli/tests/distribution.rs` |
 
 ### 8.12 Agent skill (SKILL)
 
@@ -403,7 +403,7 @@ Crates:
 | OQ-005 | macOS input helper of terminal-browser may need accessibility permission on managed machines. |
 | OQ-006 | CloudWatch Live Tail and Loki tail are not Grafana-native streams; panels refresh on an interval instead. |
 | OQ-007 | Resolved: terminal-browser refuses root and needs a kitty-graphics terminal; CI runs it as the non-root runner inside `scripts/e2e/kitty_term.py`, which answers the graphics probe and counts frames. Real terminals (Ghostty, kitty, WezTerm, iTerm2) remain subject to OQ-001. |
-| OQ-008 | The first real publish (v0.1.0) was refused: npm answered every `PUT` with E404, its reply when a token may not create the package. The `NPM_TOKEN` in use needs Read and write on All packages (a token limited to selected packages cannot create new ones) and permission to bypass 2FA. Publish to npm now checks the token with `npm whoami` (also in dry runs) and stops at the first permission error instead of retrying for ten minutes. |
+| OQ-008 | Resolved: v0.1.0 is on npm. The first attempts were refused (E404 for an invalid token, then EOTP for a token without 2FA bypass); the working token is granular, Read and write on All packages, bypassing 2FA. Publish to npm checks the token first and stops at permission errors. Trusted Publishing (no stored token) can replace it now that the packages exist. |
 | OQ-009 | The OpenTelemetry image is large (about 0.9 GB to download, 3.6 GB unpacked), so the first OpenTelemetry pane waits for the pull; later ones start in seconds. dashr's Tempo configuration is a copy of the image's (0.34.0) and must be re-checked when the image is bumped. |
 
 ## 14. Delivery ledger
@@ -425,6 +425,7 @@ Crates:
 | 2026-09-26 | Saved dashboards: name the current dashboard and reload it in a later pane (`save_dashboard`, `list_saved_dashboards`, `load_dashboard`, `delete_saved_dashboard`, `dashr dashboards`, `dashr session start --load`); the agent is told which are saved. Fixed a datasource uid clash when OpenTelemetry mode is switched on at run time (DEC-036). | LIB-001..004, OTEL-002 |
 | 2026-09-26 | Versions consolidated into a single public v0.1.0 (DEC-037): version reset to 0.1.0, `Delete release` workflow to remove the earlier v0.1.0 and v0.2.0 releases before re-releasing; `NPM_TOKEN` set, so v0.1.0 is the first npm publish. The end-to-end metric check now probes with an instant query: a range query shows a point sent "now" only after the next step boundary, which made the 10 s check pass or fail by clock alignment. | TECH-005 |
 | 2026-09-26 | v0.1.0 released on GitHub (4 checksummed archives). Publish to npm was refused (E404 for a new package: the token may not create packages); it now checks the token first and fails fast on permission errors. The dashboard pane retries opening the chat pane for a few seconds (twice, on the first open after a fresh Herdr server, the split was refused and the agent never started), and the e2e suite prints the pane when that check fails. | TECH-005 |
+| 2026-09-26 | v0.1.0 published to npm (`herdr-dashr` + four platform packages); `npx herdr-dashr@0.1.0` runs the release binary. Every PRD requirement is Verified. | TECH-005 |
 
 ### Requirement completion summary
 
@@ -444,9 +445,9 @@ Crates:
 | OTEL | 6 | 6 | 0 | 0 |
 | LOGX | 5 | 5 | 0 | 0 |
 | LIB | 4 | 4 | 0 | 0 |
-| GOV/TECH | 8 | 7 | 1 | 0 |
+| GOV/TECH | 8 | 8 | 0 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 97 | 96 | 1 | 0 |
+| **All** | 97 | 97 | 0 | 0 |
 
 ## 15. Acceptance criteria
 
