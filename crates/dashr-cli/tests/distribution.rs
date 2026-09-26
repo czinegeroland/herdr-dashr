@@ -27,6 +27,7 @@ fn triples(text: &str) -> BTreeSet<String> {
 /// Every `linux-x64`-style npm suffix mentioned in a file.
 fn suffixes(text: &str) -> BTreeSet<String> {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .map(|word| word.strip_prefix("herdr-dashr-").unwrap_or(word))
         .filter(|word| {
             ["linux-", "darwin-", "win32-"]
                 .iter()
@@ -77,7 +78,12 @@ fn package_names_and_archive_names_match_the_release() {
     let release = read(".github/workflows/release.yml");
     let installer = read("scripts/install.sh");
     assert!(packaging.contains("const ROOT_PACKAGE = 'herdr-dashr'"));
-    assert!(shim.contains("`herdr-dashr-${suffix}`"));
+    assert!(packaging.contains("`${ROOT_PACKAGE}-${platform.suffix}`"));
+    assert!(shim.contains("'linux x64': 'herdr-dashr-linux-x64'"));
+    // npm's spam filter refused the unscoped Windows name.
+    let windows = "'@czinegeroland/herdr-dashr-win32-x64'";
+    assert!(packaging.contains(&format!("name: {windows}")));
+    assert!(shim.contains(&format!("'win32 x64': {windows}")));
     assert!(installer.contains("herdr-dashr-$SUFFIX/dashr"));
     // The archive name the release writes is the one both consumers read.
     assert!(release.contains(r#"archive="dashr-${VERSION}-${{ matrix.target }}.tar.gz""#));
