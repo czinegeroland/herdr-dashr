@@ -424,7 +424,7 @@ Crates:
 | 2026-09-26 | Fixed the OpenTelemetry dashboard not refreshing by itself (DEC-034); the e2e suite now checks self-refresh and uploads screenshots of the browser pane. | VIEW-001 |
 | 2026-09-26 | Saved dashboards: name the current dashboard and reload it in a later pane (`save_dashboard`, `list_saved_dashboards`, `load_dashboard`, `delete_saved_dashboard`, `dashr dashboards`, `dashr session start --load`); the agent is told which are saved. Fixed a datasource uid clash when OpenTelemetry mode is switched on at run time (DEC-036). | LIB-001..004, OTEL-002 |
 | 2026-09-26 | Versions consolidated into a single public v0.1.0 (DEC-037): version reset to 0.1.0, `Delete release` workflow to remove the earlier v0.1.0 and v0.2.0 releases before re-releasing; `NPM_TOKEN` set, so v0.1.0 is the first npm publish. The end-to-end metric check now probes with an instant query: a range query shows a point sent "now" only after the next step boundary, which made the 10 s check pass or fail by clock alignment. | TECH-005 |
-| 2026-09-26 | v0.1.0 released on GitHub (4 checksummed archives). Publish to npm was refused (E404 for a new package: the token may not create packages); it now checks the token first and fails fast on permission errors. | TECH-005 |
+| 2026-09-26 | v0.1.0 released on GitHub (4 checksummed archives). Publish to npm was refused (E404 for a new package: the token may not create packages); it now checks the token first and fails fast on permission errors. The dashboard pane retries opening the chat pane for a few seconds (twice, on the first open after a fresh Herdr server, the split was refused and the agent never started), and the e2e suite prints the pane when that check fails. | TECH-005 |
 
 ### Requirement completion summary
 
