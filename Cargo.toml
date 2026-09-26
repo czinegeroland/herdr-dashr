@@ -36,7 +36,7 @@ thiserror = "2"
 # Blocking HTTP: the plugin talks to one local Grafana and, on promote, one
 # remote one. An async runtime would buy nothing here (decision DEC-007).
 ureq = { version = "2", features = ["json"] }
-signal-hook = "0.3"
+signal-hook = "0.4"
 base64 = "0.22"
 tempfile = "3"
 
