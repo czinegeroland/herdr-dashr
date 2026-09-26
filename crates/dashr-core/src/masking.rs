@@ -156,10 +156,22 @@ impl Detection {
         }
     }
 
-    fn is_secret(self) -> bool {
+    /// Detectors that run on every datasource, personal or not: secrets,
+    /// and personal data recognisable with high confidence (checksummed or
+    /// unambiguous). A datasource flagged non-personal by mistake still
+    /// cannot hand the agent an email address or a card number
+    /// (DASHR-PRIV-005, found by the end-to-end suite).
+    fn always_on(self) -> bool {
         matches!(
             self,
-            Detection::Jwt | Detection::AwsKey | Detection::Credential | Detection::Bearer
+            Detection::Jwt
+                | Detection::AwsKey
+                | Detection::Credential
+                | Detection::Bearer
+                | Detection::Email
+                | Detection::Iban
+                | Detection::Card
+                | Detection::Custom
         )
     }
 }
@@ -458,7 +470,7 @@ impl Masker {
     fn scan(&self, text: &str, personal: bool, pseudonyms: &mut Pseudonyms) -> String {
         let mut out = text.to_owned();
         for detector in &self.detectors {
-            if !personal && !detector.kind.is_secret() && detector.kind != Detection::Custom {
+            if !personal && !detector.kind.always_on() {
                 continue;
             }
             let mut result = String::with_capacity(out.len());
@@ -745,7 +757,14 @@ mod tests {
         assert!(!url.contains("eyJhbGci"), "{url}");
         assert!(!url.contains("AKIAABCD"), "{url}");
         assert_eq!(table.fields[1].treatment, FieldTreatment::Redacted);
-        // Non-personal: IPs in scanned fields pass, personal field names too.
+        // Non-personal: IPs in scanned fields pass, personal field names too,
+        // but emails and cards never do.
+        let strict = masker().mask_table(
+            &[field("note", "string")],
+            &[vec![json!("ann@example.com paid with 4111 1111 1111 1111")]],
+            &policy(false),
+        );
+        assert_eq!(strict.rows[0][0], json!("<email#1> paid with <card#1>"));
         assert_eq!(table.fields[2].treatment, FieldTreatment::Scanned);
         assert_eq!(table.rows[0][2], json!("10.0.0.1"));
     }

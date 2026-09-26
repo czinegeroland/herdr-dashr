@@ -11,7 +11,7 @@ use dashr_core::session::{SessionRecord, SessionStore};
 use dashr_core::watch::{self, Evaluation};
 use dashr_grafana::Client;
 
-use crate::status::{self, Summary};
+use crate::status::{self, PanelStatus, Summary};
 
 /// Where a tick's outcome goes. Implemented over the Herdr CLI by the pane,
 /// and by a recorder in tests.
@@ -26,6 +26,8 @@ pub trait Reporter {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Tick {
     pub summary: Summary,
+    /// Every panel's status, for the text view. Carries no values.
+    pub panels: Vec<PanelStatus>,
     /// Descriptions of rules that breached since the last tick.
     pub newly_breached: Vec<String>,
     /// Rule ids that cleared since the last tick.
@@ -93,6 +95,7 @@ pub fn tick(
     }
     Tick {
         summary,
+        panels: statuses,
         newly_breached: new
             .iter()
             .filter_map(|id| descriptions.get(id).cloned())
