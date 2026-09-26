@@ -10,8 +10,8 @@
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Draft |
 | PRD version | 0.1.0 |
-| Delivery phase | M2 - Herdr wiring |
-| Last updated | 2026-09-26T01:40:00Z |
+| Delivery phase | M3 - Releases |
+| Last updated | 2026-09-26T02:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -262,7 +262,7 @@ Crates:
 | DASHR-TECH-001 | Rust workspace, edition 2024, pinned toolchain, `unsafe_code` forbidden, clippy denied. | Must | Verified | `Cargo.toml`, `rust-toolchain.toml`. |
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Implemented | `.github/workflows/build-and-test.yml`. |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
-| DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Approved | Pending |
+| DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Implemented | `.github/workflows/release.yml` (4 targets, `.sha256` per archive); verified on the first tag |
 
 ## 9. Security requirements
 
@@ -318,6 +318,7 @@ Crates:
 | DEC-018 | `herdr pane split --ratio` is the share the original pane keeps (observed on 0.9.1); `agent.split_ratio` is passed as is. |
 | DEC-019 | The default agent argv puts the prompt before `--mcp-config`, whose Claude Code parser takes several values and swallowed the prompt. |
 | DEC-020 | `masking.testdata_personal` lets the end-to-end suite run full masking through a real Grafana using TestData CSV. |
+| DEC-021 | Dependency majors (ureq 3, toml 1, signal-hook 0.4, base64 0.23, actions/checkout 7) are taken together in one reviewed PR with code changes, superseding the Dependabot PRs that could not compile on their own. |
 
 ## 13. Open questions and risks
 
@@ -336,6 +337,7 @@ Crates:
 |---|---|---|
 | 2026-09-26 | M0/M1: PRD, CI, governance; library crates `dashr-core`, `dashr-grafana`, `dashr-docker`, `dashr-herdr`, `dashr-aws`, `dashr-runtime`, `dashr-mcp` with unit tests. | GOV-001..003, TECH-001..002, GRAF-*, DS-*, PRIV-*, AWS-*, MCP-*, ALERT-*, PROMO-*, SEC-* |
 | 2026-09-26 | M2: `dashr` binary (Herdr actions, dashboard pane, chat pane, hooks, standalone commands, doctor), generated `herdr-plugin.toml`, `scripts/install.sh`, agent skill, end-to-end suite in CI; fixed a masking gap on non-personal datasources (DEC-017). | HERDR-001..007/009, GRAF-001..007, VIEW-001/003, CHAT-001..003, MCP-002..005/009/010, PRIV-005, AWS-004, ALERT-001/002, TECH-003, SEC-001/004 |
+| 2026-09-26 | M3: release workflow publishing checksummed Linux/macOS archives for `scripts/install.sh`; dependency majors with the Grafana client ported to ureq 3. | TECH-004 |
 
 ### Requirement completion summary
 
@@ -351,9 +353,9 @@ Crates:
 | AWS | 6 | 4 | 2 | 0 |
 | ALERT | 4 | 2 | 2 | 0 |
 | PROMO | 3 | 1 | 2 | 0 |
-| GOV/TECH | 7 | 2 | 4 | 1 |
+| GOV/TECH | 7 | 2 | 5 | 0 |
 | SEC | 8 | 6 | 2 | 0 |
-| **All** | 75 | 50 | 24 | 1 |
+| **All** | 75 | 50 | 25 | 0 |
 
 ## 15. Acceptance criteria
 

@@ -1,0 +1,77 @@
+name: Release
+
+# DASHR-TECH-004: a `v<version>` tag builds the dashr binary for the four
+# targets scripts/install.sh knows, packs each as
+# `dashr-<version>-<target>.tar.gz` with a `.sha256` beside it, and publishes
+# them on the GitHub release the plugin's build step downloads from.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-13 }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Check the tag matches the manifest version
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' herdr-plugin.toml | head -n 1)"
+          test "v$version" = "$TAG" || { echo "tag $TAG != manifest v$version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - run: cargo build --release --locked --bin dashr
+      - name: Package
+        shell: bash
+        run: |
+          archive="dashr-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C target/release dashr
+          if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
+          ./target/release/dashr --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashr-${{ matrix.target }}
+          path: dashr-*.tar.gz*
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          ls -l dist
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

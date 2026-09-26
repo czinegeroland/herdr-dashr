@@ -75,10 +75,13 @@ impl Client {
     }
 
     fn build(base: &str, token: Option<String>, timeout: Duration) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(5))
-            .timeout(timeout)
-            .build();
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(5)))
+            .timeout_global(Some(timeout))
+            // Statuses are read and reported with Grafana's own message.
+            .http_status_as_error(false)
+            .build()
+            .into();
         Self {
             base: base.trim_end_matches('/').to_owned(),
             token,
@@ -90,69 +93,74 @@ impl Client {
         &self.base
     }
 
-    fn request(&self, method: &str, path: &str) -> ureq::Request {
-        let request = self
-            .agent
-            .request(method, &format!("{}{path}", self.base))
-            .set("Accept", "application/json");
-        match &self.token {
-            Some(token) => request.set("Authorization", &format!("Bearer {token}")),
-            None => request,
-        }
+    fn authorization(&self) -> Option<String> {
+        self.token.as_ref().map(|token| format!("Bearer {token}"))
     }
 
     fn handle(
         &self,
         path: &str,
-        result: Result<ureq::Response, ureq::Error>,
+        result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
     ) -> Result<Value, GrafanaError> {
-        match result {
-            Ok(response) => {
-                let text = response
-                    .into_string()
-                    .map_err(|error| GrafanaError::Unexpected {
-                        path: path.to_owned(),
-                        message: error.to_string(),
-                    })?;
-                if text.trim().is_empty() {
-                    return Ok(Value::Null);
-                }
-                serde_json::from_str(&text).map_err(|error| GrafanaError::Unexpected {
+        let mut response = result.map_err(|error| GrafanaError::Unreachable {
+            base: self.base.clone(),
+            message: error.to_string(),
+        })?;
+        let status = response.status().as_u16();
+        let text =
+            response
+                .body_mut()
+                .read_to_string()
+                .map_err(|error| GrafanaError::Unexpected {
                     path: path.to_owned(),
                     message: error.to_string(),
+                })?;
+        if !(200..300).contains(&status) {
+            let message = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("message")
+                        .or_else(|| value.get("error"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
                 })
-            }
-            Err(ureq::Error::Status(status, response)) => {
-                let body = response.into_string().unwrap_or_default();
-                let message = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("message")
-                            .or_else(|| value.get("error"))
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_else(|| body.chars().take(300).collect());
-                Err(GrafanaError::Status {
-                    status,
-                    path: path.to_owned(),
-                    message,
-                })
-            }
-            Err(ureq::Error::Transport(transport)) => Err(GrafanaError::Unreachable {
-                base: self.base.clone(),
-                message: transport.to_string(),
-            }),
+                .unwrap_or_else(|| text.chars().take(300).collect());
+            return Err(GrafanaError::Status {
+                status,
+                path: path.to_owned(),
+                message,
+            });
         }
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|error| GrafanaError::Unexpected {
+            path: path.to_owned(),
+            message: error.to_string(),
+        })
     }
 
     fn get(&self, path: &str) -> Result<Value, GrafanaError> {
-        self.handle(path, self.request("GET", path).call())
+        let mut request = self
+            .agent
+            .get(format!("{}{path}", self.base))
+            .header("Accept", "application/json");
+        if let Some(authorization) = self.authorization() {
+            request = request.header("Authorization", authorization);
+        }
+        self.handle(path, request.call())
     }
 
     fn post(&self, path: &str, body: &Value) -> Result<Value, GrafanaError> {
-        self.handle(path, self.request("POST", path).send_json(body.clone()))
+        let mut request = self
+            .agent
+            .post(format!("{}{path}", self.base))
+            .header("Accept", "application/json");
+        if let Some(authorization) = self.authorization() {
+            request = request.header("Authorization", authorization);
+        }
+        self.handle(path, request.send_json(body))
     }
 
     /// `GET /api/health`: whether the database is up.
