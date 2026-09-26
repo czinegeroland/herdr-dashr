@@ -71,7 +71,8 @@ browser profile are deleted. The sidebar token `$dashr` shows panel health
 
 The OpenTelemetry action (or `[otel] enabled = true`) runs
 `grafana/otel-lgtm` instead of plain Grafana: still one container per pane,
-with Loki, Tempo and Prometheus behind an OTLP endpoint on loopback. Programs
+with Loki, Tempo and Prometheus behind an OTLP endpoint on loopback. What you
+send is queryable within about five seconds (traces in about two). Programs
 started from the chat pane find it in `OTEL_EXPORTER_OTLP_ENDPOINT`; anything
 else can be wrapped:
 
@@ -133,7 +134,9 @@ you say `personal = false`.
 - `panel_status` reports rows and errors, never values. Watches are evaluated
   by the pane; the agent never sees what it alerts on.
 - Grafana runs with a read-only root, tmpfs storage, no logs, no swap and no
-  capabilities, on loopback only. The browser profile lives in memory.
+  capabilities, on loopback only. The browser profile lives in memory. In
+  OpenTelemetry mode, logs, traces and metrics are kept on disk in anonymous
+  Docker volumes that are deleted with the container.
 
 ## Develop
 

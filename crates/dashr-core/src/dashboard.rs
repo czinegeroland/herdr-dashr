@@ -403,7 +403,7 @@ pub fn welcome(title: &str, note: &str) -> Value {
 /// live trail of every log line and the latest traces (DASHR-OTEL-005).
 pub fn otel_welcome(http_endpoint: &str, grpc_endpoint: &str) -> Value {
     let note = format!(
-        "**OpenTelemetry endpoint of this pane** — nothing is stored; it stops when the pane closes.\n\n\
+        "**OpenTelemetry endpoint of this pane** — its data is deleted when the pane closes.\n\n\
          `OTEL_EXPORTER_OTLP_ENDPOINT={http_endpoint}` (OTLP/HTTP) · gRPC `{grpc_endpoint}`\n\n\
          Ship any command's output: `dashr tail -- <command>` · Ask the agent below to watch for the log messages you expect."
     );

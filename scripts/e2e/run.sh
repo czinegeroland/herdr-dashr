@@ -384,10 +384,14 @@ assert host["ReadonlyRootfs"] is True and host["LogConfig"]["Type"] == "none"
 assert host["Memory"] == host["MemorySwap"] and "ALL" in (host["CapDrop"] or [])
 for port in ("3000/tcp", "4317/tcp", "4318/tcp"):
     assert all(b["HostIp"] == "127.0.0.1" for b in host["PortBindings"][port]), port
-assert "/var/tempo" in host["Tmpfs"] and "/data" in host["Tmpfs"]
+volumes = {m["Destination"] for m in c["Mounts"] if m["Type"] == "volume"}
+assert volumes == {"/data", "/var/tempo"}, volumes
+binds = {m["Destination"] for m in c["Mounts"] if m["Type"] == "bind"}
+assert "/otel-lgtm/tempo-config.yaml" in binds, binds
 EOF2
+OVOLUMES="$(docker inspect "$OCONTAINER" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}')"
 curl -fsS -H 'content-type: application/json' -d '{"resourceLogs":[]}' "http://127.0.0.1:$OTLP_HTTP/v1/logs" >/dev/null || fail "OTLP/HTTP does not accept logs"
-ok "one hardened otel-lgtm container; Grafana and OTLP (gRPC, HTTP) on loopback only"
+ok "one hardened otel-lgtm container; Grafana and OTLP (gRPC, HTTP) on loopback only; telemetry in anonymous volumes"
 wait_for 30 "herdr pane read $OPANE --source visible | grep -q 'OTLP:      http://127.0.0.1:$OTLP_HTTP'" || fail "text view does not show the OTLP endpoint"
 wait_for 30 "grep -q '\"chat_pane\": \"' $ORECORD" || fail "OpenTelemetry chat pane not recorded"
 OCHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("chat_pane") or "")' "$ORECORD")"
@@ -432,7 +436,7 @@ check_logx() {
   python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/logx-check.json" \
     | tail -n 1 | python3 -c 'import json,sys; r=json.loads(json.loads(sys.stdin.read())["text"])["report"]; print(" ".join(e["outcome"] for e in r["expectations"]), r["passed"])'
 }
-wait_for 30 "check_logx | grep -q '^seen seen clear True$'" || fail "expectations not met: $(check_logx)"
+wait_for 10 "check_logx | grep -q '^seen seen clear True$'" || fail "expectations not met within 10 s: $(check_logx)"
 ok "both expected messages seen, case-insensitively; verdict passed"
 python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/logx-check.json" >"$WORK/logx-check.out"
 grep -q 'planted.person' "$WORK/logx-check.out" && fail "log_expectations leaked line content"
@@ -464,10 +468,10 @@ rows = [sum(f["total_rows"] for r in json.loads(p["text"])["results"] for f in r
 assert all(r > 0 for r in rows), rows
 EOF3
 }
-wait_for 90 probe_otel || { cat "$WORK/otel-probe.out"; fail "metric, trace or logs not queryable"; }
+wait_for 10 probe_otel || { cat "$WORK/otel-probe.out"; fail "metric, trace or logs not queryable within 10 s"; }
 grep -q 'planted.person@example.com' "$WORK/otel-probe.out" && fail "a log line leaked unmasked through probe_query"
 grep -q '<email#1>' "$WORK/otel-probe.out" || fail "log sample was not masked"
-ok "OTLP metric in Prometheus, trace in Tempo, logs in Loki; log samples masked"
+ok "OTLP metric in Prometheus, trace in Tempo, logs in Loki, all within 10 s; log samples masked"
 
 echo '[{"tool": "clear_log_expectations"}, {"tool": "get_dashboard"}]' >"$WORK/logx-clear.json"
 python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/logx-clear.json" >"$WORK/logx-clear.out"
@@ -485,7 +489,10 @@ ok "clearing removes the section, restores the layout and unblocks the pane"
 herdr pane close "$OPANE" >/dev/null
 wait_for 30 "! docker ps --format '{{.Names}}' | grep -q $OCONTAINER" || fail "OpenTelemetry container still running"
 wait_for 10 "[ ! -e $ORECORD ]" || fail "OpenTelemetry session record left behind"
-ok "closing the pane stops the OpenTelemetry container and deletes its files"
+for volume in $OVOLUMES; do
+  wait_for 10 "! docker volume inspect $volume" || fail "volume $volume left behind"
+done
+ok "closing the pane stops the OpenTelemetry container and deletes its files and volumes"
 
 log "doctor"
 "$ROOT/bin/dashr" --config-dir "$CONFIG_DIR" --state-dir "$STATE_DIR" doctor >"$WORK/doctor.out" || { cat "$WORK/doctor.out"; fail "doctor failed"; }

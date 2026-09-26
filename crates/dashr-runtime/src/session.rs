@@ -146,6 +146,17 @@ fn write_provisioning(runtime_dir: &Path, contents: &str) -> std::io::Result<std
     Ok(root)
 }
 
+/// Writes a file the container user can read through a bind mount.
+fn write_readable(path: &Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))?;
+    }
+    Ok(())
+}
+
 /// Starts Grafana for a session and pushes a first dashboard.
 pub fn start(
     config: &Config,
@@ -169,7 +180,16 @@ pub fn start(
         .map(|pipeline| vec![provisioning::cloudwatch_for_region(&pipeline.region)])
         .unwrap_or_default();
     let provisioned = provisioning::build(config, &extra);
-    let provisioning_dir = match write_provisioning(&runtime_dir, &provisioned.datasources_file) {
+    let written = write_provisioning(&runtime_dir, &provisioned.datasources_file).and_then(|dir| {
+        if config.otel.enabled {
+            write_readable(
+                &dir.join(dashr_docker::TEMPO_CONFIG_NAME),
+                dashr_docker::OTEL_TEMPO_CONFIG,
+            )?;
+        }
+        Ok(dir)
+    });
+    let provisioning_dir = match written {
         Ok(dir) => dir,
         Err(error) => {
             paths::remove_runtime_dir(&runtime_dir);

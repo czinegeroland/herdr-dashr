@@ -2,7 +2,8 @@
 
 An OpenTelemetry session runs one container per pane that holds Grafana plus
 an OpenTelemetry collector, Loki (logs), Tempo (traces) and Prometheus
-(metrics). Nothing is stored; everything goes when the pane closes.
+(metrics). Telemetry is kept on disk inside the container and deleted with it
+when the pane closes.
 
 `session_info` returns the endpoint. Programs export to it with the standard
 variables (already set in the chat pane's shell):
@@ -113,8 +114,9 @@ histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_
 `probe_query` the metric name first — Prometheus returns `{__name__=~"http.*"}`
 matches with their real names.
 
-## Traces take a moment
+## How fast data appears
 
-Tempo makes a trace searchable about 10–20 seconds after its last span. An
-empty trace table right after a run is normal; logs and metrics appear within
-a couple of seconds.
+Logs, traces and metrics are queryable within about five seconds of being
+sent (traces in about two). If a panel is still empty ten seconds after the
+human ran the code, the data did not arrive: check the service name and the
+endpoint with `session_info` rather than waiting longer.

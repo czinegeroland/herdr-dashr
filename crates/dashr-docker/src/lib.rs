@@ -44,6 +44,15 @@ pub enum Flavor {
 pub const OTEL_PROVISIONING_FILE: &str =
     "/otel-lgtm/grafana/conf/provisioning/datasources/dashr.yaml";
 
+/// dashr's Tempo configuration for the otel-lgtm image (DEC-033): the
+/// image's own plus the settings that make traces searchable in seconds.
+pub const OTEL_TEMPO_CONFIG: &str = include_str!("../assets/tempo.yaml");
+/// Where the image reads it.
+pub const OTEL_TEMPO_CONFIG_FILE: &str = "/otel-lgtm/tempo-config.yaml";
+/// The file name, in the provisioning directory, that
+/// [`OTEL_TEMPO_CONFIG`] is written to and mounted from.
+pub const TEMPO_CONFIG_NAME: &str = "tempo.yaml";
+
 /// Everything that decides how a session container runs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSpec {
@@ -103,16 +112,22 @@ impl RunSpec {
         }
         // Loopback only, on ports Docker picks.
         let mut ports = vec!["127.0.0.1::3000"];
-        // Nothing is written outside memory.
-        let tmpfs: &[&str] = match self.flavor {
-            Flavor::Grafana => &[
-                "/var/lib/grafana:uid=472,gid=0,mode=0770",
-                "/tmp",
-                "/var/log/grafana:uid=472,gid=0",
-            ],
-            // Every component writes under /data; Tempo also keeps a marker
-            // directory in /var/tempo.
-            Flavor::OtelLgtm => &["/data", "/tmp", "/var/tempo"],
+        // Plain Grafana writes nothing outside memory. The OpenTelemetry
+        // components keep logs, traces and metrics on disk instead, in
+        // anonymous volumes that `--rm` deletes with the container, so a
+        // long test session does not eat the memory limit (DEC-033).
+        let (tmpfs, volumes): (&[&str], &[&str]) = match self.flavor {
+            Flavor::Grafana => (
+                &[
+                    "/var/lib/grafana:uid=472,gid=0,mode=0770",
+                    "/tmp",
+                    "/var/log/grafana:uid=472,gid=0",
+                ],
+                &[],
+            ),
+            // Every component writes under /data; Tempo also keeps its
+            // live-store files in /var/tempo.
+            Flavor::OtelLgtm => (&["/tmp"], &["/data", "/var/tempo"]),
         };
         if self.flavor == Flavor::OtelLgtm {
             ports.extend(["127.0.0.1::4317", "127.0.0.1::4318"]);
@@ -125,6 +140,10 @@ impl RunSpec {
         for mount in tmpfs {
             args.push("--tmpfs".into());
             args.push((*mount).into());
+        }
+        for target in volumes {
+            args.push("--mount".into());
+            args.push(format!("type=volume,dst={target}"));
         }
         args.extend([
             "--log-driver".into(),
@@ -153,6 +172,13 @@ impl RunSpec {
                 ),
             },
         ]);
+        if self.flavor == Flavor::OtelLgtm {
+            args.push("-v".into());
+            args.push(format!(
+                "{}:{OTEL_TEMPO_CONFIG_FILE}:ro",
+                self.provisioning_dir.join(TEMPO_CONFIG_NAME).display()
+            ));
+        }
         if self.host_gateway {
             args.push("--add-host".into());
             args.push("host.docker.internal:host-gateway".into());
@@ -482,9 +508,23 @@ mod tests {
         for port in ["127.0.0.1::3000", "127.0.0.1::4317", "127.0.0.1::4318"] {
             assert!(has_pair(&args, "-p", port), "{port}");
         }
-        for mount in ["/data", "/tmp", "/var/tempo"] {
-            assert!(has_pair(&args, "--tmpfs", mount), "{mount}");
+        assert!(has_pair(&args, "--tmpfs", "/tmp"));
+        // Telemetry lives on disk in anonymous volumes, deleted with the
+        // container by --rm.
+        assert!(args.contains(&"--rm".to_owned()));
+        for target in ["/data", "/var/tempo"] {
+            assert!(
+                has_pair(&args, "--mount", &format!("type=volume,dst={target}")),
+                "{target}"
+            );
+            assert!(!has_pair(&args, "--tmpfs", target), "{target}");
         }
+        assert!(has_pair(
+            &args,
+            "-v",
+            &format!("/dev/shm/dashr/x/provisioning/tempo.yaml:{OTEL_TEMPO_CONFIG_FILE}:ro")
+        ));
+        assert!(OTEL_TEMPO_CONFIG.contains("query_end_cutoff: 1s"));
         assert!(has_pair(
             &args,
             "-v",
