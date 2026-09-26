@@ -51,7 +51,7 @@ jobs:
           tar -czf "$archive" -C target/release dashr
           if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
           ./target/release/dashr --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dashr-${{ matrix.target }}
           path: dashr-*.tar.gz*
