@@ -521,9 +521,12 @@ log "AC-OTEL: traces and metrics over OTLP reach Tempo and Prometheus"
 NOW_NS="$(date +%s)000000000"
 curl -fsS -H 'content-type: application/json' "http://127.0.0.1:$OTLP_HTTP/v1/traces" -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"POST /orders","kind":2,"startTimeUnixNano":"'"$NOW_NS"'","endTimeUnixNano":"'"$NOW_NS"'"}]}]}]}' >/dev/null
 curl -fsS -H 'content-type: application/json' "http://127.0.0.1:$OTLP_HTTP/v1/metrics" -d '{"resourceMetrics":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},"scopeMetrics":[{"metrics":[{"name":"dashr.e2e.orders","sum":{"aggregationTemporality":2,"isMonotonic":true,"dataPoints":[{"asInt":"5","timeUnixNano":"'"$NOW_NS"'"}]}}]}]}]}' >/dev/null
+# The metric is probed with an instant query: a range query is evaluated at
+# step-aligned times, so a single sample stamped "now" shows up only after
+# the next step boundary, up to a step (15 s) later.
 cat >"$WORK/otel-probe.json" <<'EOF2'
 [
-  {"tool": "probe_query", "arguments": {"datasource_uid": "prometheus", "query": {"expr": "dashr_e2e_orders_total"}, "from": "now-5m"}},
+  {"tool": "probe_query", "arguments": {"datasource_uid": "prometheus", "query": {"expr": "dashr_e2e_orders_total", "instant": true, "range": false}, "from": "now-5m"}},
   {"tool": "probe_query", "arguments": {"datasource_uid": "tempo", "query": {"queryType": "traceql", "query": "{resource.service.name=\"checkout\"}", "limit": 5, "tableType": "traces"}, "from": "now-15m"}},
   {"tool": "probe_query", "arguments": {"datasource_uid": "loki", "query": {"expr": "{service_name=\"checkout\"}", "queryType": "range"}, "from": "now-15m"}}
 ]

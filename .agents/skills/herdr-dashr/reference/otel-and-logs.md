@@ -111,6 +111,11 @@ sum by (job) (rate(http_server_request_duration_seconds_count[1m]))
 histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket[5m])))
 ```
 
+A range query is evaluated at step-aligned times, so a point sent a moment
+ago appears in a time series only after the next step (up to 15 s over a few
+minutes). To check that a metric has arrived, `probe_query` it as an instant
+query: `{"expr": "dashr_e2e_orders_total", "instant": true, "range": false}`.
+
 `probe_query` the metric name first — Prometheus returns `{__name__=~"http.*"}`
 matches with their real names.
 
