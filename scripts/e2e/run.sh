@@ -151,7 +151,8 @@ assert labels["herdr.dashr"] == "1" and labels["herdr.pane"], "labels"
 EOF
 ok "container read-only, tmpfs, no logs, no swap, no capabilities, loopback-only"
 
-wait_for 30 "grep -q '\"chat_pane\": \"' $RECORD" || fail "chat pane not recorded"
+wait_for 30 "grep -q '\"chat_pane\": \"' $RECORD" \
+  || { herdr pane read "$PANE" --source recent | tail -30; fail "chat pane not recorded"; }
 CHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("chat_pane") or "")' "$RECORD")"
 [ -n "$CHAT" ] || fail "chat pane not recorded"
 wait_for 20 "herdr pane read $CHAT --source recent | grep -q AGENT-STARTED" || fail "agent command did not run"

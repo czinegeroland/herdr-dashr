@@ -350,13 +350,31 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
             ));
         }
         // Herdr's ratio is the share the split pane keeps (observed, 0.9.1).
-        match herdr.pane_split(
+        // A tab opened a moment ago can refuse the first split; retry
+        // briefly rather than start without the agent.
+        let mut split = herdr.pane_split(
             &pane_id,
             "down",
             config.agent.split_ratio,
             cwd.as_deref(),
             &split_env,
-        ) {
+        );
+        for _ in 0..4 {
+            let Err(error) = &split else { break };
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            println!("dashr: chat pane not opened yet ({error}); retrying");
+            std::thread::sleep(Duration::from_secs(1));
+            split = herdr.pane_split(
+                &pane_id,
+                "down",
+                config.agent.split_ratio,
+                cwd.as_deref(),
+                &split_env,
+            );
+        }
+        match split {
             Ok(chat) => {
                 // The shell needs a moment to draw its prompt before input.
                 std::thread::sleep(Duration::from_millis(300));
