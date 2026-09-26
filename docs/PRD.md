@@ -10,8 +10,8 @@
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Draft |
 | PRD version | 0.1.0 |
-| Delivery phase | M1 - Libraries |
-| Last updated | 2026-09-26T00:40:00Z |
+| Delivery phase | M2 - Herdr wiring |
+| Last updated | 2026-09-26T01:40:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -146,27 +146,27 @@ Crates:
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-HERDR-001 | `herdr-plugin.toml` is generated from code and a test fails when the checked-in file differs. | Must | Implemented | `crates/dashr-herdr/src/manifest.rs` renders it; checked-in file and comparison test land in M2. |
-| DASHR-HERDR-002 | Action `open` opens a new tab: dashboard pane on top, chat pane split below. | Must | Approved | Pending |
-| DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Implemented | Pattern tested in `manifest::tests::link_pattern_matches_both_consoles`; action lands in M2. |
-| DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Implemented | `dashr_docker::orphans`, tested in `orphans_are_this_servers_containers_without_a_live_pane`; hook lands in M2. |
-| DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Approved | Event shape tested in `env::tests::reads_observed_herdr_shapes`. |
-| DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step downloads a checksum-verified release binary, falling back to `cargo` only when no release exists. | Must | Approved | Pending |
-| DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Implemented | `dashr_runtime::monitor::report`, `status::Summary::token`. |
+| DASHR-HERDR-001 | `herdr-plugin.toml` is generated from code and a test fails when the checked-in file differs. | Must | Verified | `crates/dashr-cli/tests/plugin_manifest.rs` |
+| DASHR-HERDR-002 | Action `open` opens a new tab: dashboard pane on top, chat pane split below. | Must | Verified | AC-OPEN in `scripts/e2e/run.sh` |
+| DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Verified | AC-PIPELINE in `scripts/e2e/run.sh`; `link_pattern_matches_both_consoles` |
+| DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Verified | Startup reaper scenario in `scripts/e2e/run.sh` |
+| DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
+| DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step downloads a checksum-verified release binary, falling back to `cargo` only when no release exists. | Must | Implemented | `scripts/install.sh`; release artifacts pending (DASHR-TECH-004) |
+| DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
 | DASHR-HERDR-008 | The plugin declares and supports Linux and macOS. | Must | Implemented | Manifest `platforms`; CI matrix in `.github/workflows/build-and-test.yml`. |
-| DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Approved | Pending |
+| DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Implemented | `crates/dashr-cli/src/doctor.rs` |
 
 ### 8.2 Grafana lifecycle (GRAF)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-GRAF-001 | One container per pane, named `herdr-grafana-<session>`, labelled with owner, pane, socket hash and session, bound to a random loopback port. | Must | Implemented | `dashr_docker::RunSpec::args`, `run_args_store_nothing_and_bind_loopback`. |
-| DASHR-GRAF-002 | The container stores nothing: `--read-only`, tmpfs for `/var/lib/grafana`, `/tmp`, `/var/log/grafana`, `--log-driver none`, `--memory-swap` equal to `--memory`, all capabilities dropped. | Must | Implemented | Same test; flags verified against `grafana/grafana:12.1.1` during development. |
-| DASHR-GRAF-003 | Anonymous admin, login form disabled, analytics, update checks and news disabled. | Must | Implemented | `RunSpec::grafana_env`. |
-| DASHR-GRAF-004 | Runtime files live in a 0700 directory on a memory-backed file system where one exists, and are deleted on stop. | Must | Implemented | `dashr_runtime::paths`, `runtime_dir_is_private_and_removable`. |
-| DASHR-GRAF-005 | Start waits for `/api/health` with a bounded timeout and cleans up on failure; a missing Docker is a clear error. | Must | Implemented | `session::start`, `start_fails_cleanly_without_docker`, `unreachable_and_timeout`. |
-| DASHR-GRAF-006 | The pane stops its container on normal exit and on SIGINT, SIGTERM and SIGHUP (Herdr sends SIGHUP on pane close). | Must | Approved | SIGHUP on close observed against Herdr 0.9.1. |
-| DASHR-GRAF-007 | The image is pinned (`grafana/grafana:12.1.1`); `dashr image build` produces a custom image with Infinity and Zabbix plugins installed outside the tmpfs path. | Must | Implemented | `config::DEFAULT_IMAGE`, `dockerfile_keeps_plugins_out_of_the_tmpfs`; command lands in M2. |
+| DASHR-GRAF-001 | One container per pane, named `herdr-grafana-<session>`, labelled with owner, pane, socket hash and session, bound to a random loopback port. | Must | Verified | AC-OPEN `docker inspect` assertions in `scripts/e2e/run.sh` |
+| DASHR-GRAF-002 | The container stores nothing: `--read-only`, tmpfs for `/var/lib/grafana`, `/tmp`, `/var/log/grafana`, `--log-driver none`, `--memory-swap` equal to `--memory`, all capabilities dropped. | Must | Verified | AC-OPEN `docker inspect` assertions in `scripts/e2e/run.sh` |
+| DASHR-GRAF-003 | Anonymous admin, login form disabled, analytics, update checks and news disabled. | Must | Verified | `RunSpec::grafana_env`; AC-OPEN (anonymous API access) |
+| DASHR-GRAF-004 | Runtime files live in a 0700 directory on a memory-backed file system where one exists, and are deleted on stop. | Must | Verified | AC-CLOSE in `scripts/e2e/run.sh` |
+| DASHR-GRAF-005 | Start waits for `/api/health` with a bounded timeout and cleans up on failure; a missing Docker is a clear error. | Must | Verified | `start_fails_cleanly_without_docker`, `unreachable_and_timeout` |
+| DASHR-GRAF-006 | The pane stops its container on normal exit and on SIGINT, SIGTERM and SIGHUP (Herdr sends SIGHUP on pane close). | Must | Verified | AC-CLOSE (pane close sends SIGHUP) in `scripts/e2e/run.sh` |
+| DASHR-GRAF-007 | The image is pinned (`grafana/grafana:12.1.1`); `dashr image build` produces a custom image with Infinity and Zabbix plugins installed outside the tmpfs path. | Must | Implemented | `dashr image build`; `dockerfile_keeps_plugins_out_of_the_tmpfs` |
 | DASHR-GRAF-008 | A session record (ids, port, uid, datasource policies) is written to the plugin state directory, holds no secret or data value, and is removed on stop. | Must | Verified | `session::tests::records_hold_no_secret_shaped_fields`, `round_trips_lists_and_removes`. |
 
 ### 8.3 Datasources (DS)
@@ -184,33 +184,33 @@ Crates:
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser. | Must | Implemented | `SessionRecord::kiosk_url`, `Browser::open_command`; pane lands in M2. |
+| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser. | Must | Implemented | `pane::dashboard` spawns `Browser::open_command`; not exercised in CI (no kitty terminal) |
 | DASHR-VIEW-002 | The browser profile lives in the session runtime directory via `TERMINAL_BROWSER_APPDATA` and is deleted with it. | Must | Implemented | `open_command_points_the_profile_at_the_runtime_dir`. |
-| DASHR-VIEW-003 | Without terminal-browser (or with `browser.enabled = false`) the pane shows a text status view: the URL and per-panel state. | Must | Approved | Pending |
+| DASHR-VIEW-003 | Without terminal-browser (or with `browser.enabled = false`) the pane shows a text status view: the URL and per-panel state. | Must | Verified | Text-view assertions in `scripts/e2e/run.sh` |
 | DASHR-VIEW-004 | Applying a dashboard reloads the browser showing this session. | Should | Implemented | `apply::apply`, `finds_the_browser_showing_the_session`. |
 
 ### 8.5 Chat pane (CHAT)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-CHAT-001 | The chat pane runs the configured agent command with a generated MCP config naming `dashr mcp --session <id>`; `mcp-grafana` is added only when opted in. | Must | Approved | Pending |
-| DASHR-CHAT-002 | The agent receives the privacy rules as MCP server instructions and an agent skill. | Must | In progress | `dashr_mcp::tools::INSTRUCTIONS`; skill lands in M2. |
-| DASHR-CHAT-003 | The agent command is typed into the pane's shell with every argument POSIX-quoted. | Must | Implemented | `dashr_core::shell`, `everything_else_is_single_quoted`. |
+| DASHR-CHAT-001 | The chat pane runs the configured agent command with a generated MCP config naming `dashr mcp --session <id>`; `mcp-grafana` is added only when opted in. | Must | Verified | AC-OPEN chat-pane assertions; `mcp_config_names_the_session_and_paths` |
+| DASHR-CHAT-002 | The agent receives the privacy rules as MCP server instructions and an agent skill. | Must | Implemented | `dashr_mcp::tools::INSTRUCTIONS`; `.agents/skills/herdr-dashr/SKILL.md` via `dashr skill install` |
+| DASHR-CHAT-003 | The agent command is typed into the pane's shell with every argument POSIX-quoted. | Must | Verified | `agent_argv_substitutes_placeholders`; AC-OPEN |
 
 ### 8.6 MCP server (MCP)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
 | DASHR-MCP-001 | Stdio MCP server: `initialize` (version negotiation), `ping`, `tools/list`, `tools/call`, JSON-RPC errors. | Must | Verified | `protocol::tests::full_handshake_and_call`, `protocol::tests::errors`. |
-| DASHR-MCP-002 | `list_datasources` returns uid, name, type and personal flag only. | Must | Implemented | `DatasourcePolicy`. |
-| DASHR-MCP-003 | `apply_dashboard` validates structure and datasource references, pins uid/refresh/tag, saves and reloads. | Must | Implemented | `dashboard::tests::*`, `apply::apply`. |
-| DASHR-MCP-004 | `panel_status` reports per-panel state, rows, fields and masked errors, never values. | Must | Implemented | `summaries_carry_no_values_and_mask_errors`, `status::tests::classification`. |
-| DASHR-MCP-005 | `panel_data_sample` and `probe_query` return masked rows with real field names and types, capped by `masking.max_rows`. | Must | Implemented | `DashrTools::masked_results`. |
+| DASHR-MCP-002 | `list_datasources` returns uid, name, type and personal flag only. | Must | Verified | AC-MASK in `scripts/e2e/run.sh` |
+| DASHR-MCP-003 | `apply_dashboard` validates structure and datasource references, pins uid/refresh/tag, saves and reloads. | Must | Verified | AC-MASK (valid and invalid dashboards) in `scripts/e2e/run.sh` |
+| DASHR-MCP-004 | `panel_status` reports per-panel state, rows, fields and masked errors, never values. | Must | Verified | AC-MASK in `scripts/e2e/run.sh` |
+| DASHR-MCP-005 | `panel_data_sample` and `probe_query` return masked rows with real field names and types, capped by `masking.max_rows`. | Must | Verified | AC-MASK in `scripts/e2e/run.sh` |
 | DASHR-MCP-006 | `get_dashboard` returns the current dashboard JSON. | Should | Implemented | `DashrTools::get_dashboard`. |
 | DASHR-MCP-007 | `open_for_pipeline` bootstraps from a CodePipeline URL, or opens a new dashboard tab when the region lacks CloudWatch. | Should | Implemented | `DashrTools::open_for_pipeline`. |
 | DASHR-MCP-008 | `promote` copies the dashboard to a configured persistent Grafana. | Should | Implemented | `promote::promote`. |
-| DASHR-MCP-009 | `watch_panel`, `list_watches` and `remove_watch` manage local alert rules. | Should | Implemented | `watches_are_managed_through_the_store`. |
-| DASHR-MCP-010 | `screenshot` is refused unless every datasource the dashboard uses is non-personal. | Must | Verified | `tools::tests::screenshots_only_for_non_personal_dashboards`. |
+| DASHR-MCP-009 | `watch_panel`, `list_watches` and `remove_watch` manage local alert rules. | Should | Verified | AC-ALERT in `scripts/e2e/run.sh`; `watches_are_managed_through_the_store` |
+| DASHR-MCP-010 | `screenshot` is refused unless every datasource the dashboard uses is non-personal. | Must | Verified | AC-MASK; `screenshots_only_for_non_personal_dashboards` |
 
 ### 8.7 Privacy and masking (PRIV)
 
@@ -220,7 +220,7 @@ Crates:
 | DASHR-PRIV-002 | Replacements are stable pseudonyms within one response. | Must | Verified | `personal_fields_are_redacted_with_stable_pseudonyms`. |
 | DASHR-PRIV-003 | Global and per-datasource allow-lists pass named fields; secret-named fields are never allow-listed. | Must | Verified | `allow_lists_apply_but_never_to_secrets`. |
 | DASHR-PRIV-004 | Numbers, booleans and timestamps pass unless the field is redacted; ids and dates are not mistaken for phones. | Must | Verified | `ordinary_numbers_in_text_are_not_phones`. |
-| DASHR-PRIV-005 | Non-personal datasources skip personal detectors but keep secret detectors. | Must | Verified | `secrets_are_masked_even_on_non_personal_datasources`. |
+| DASHR-PRIV-005 | Non-personal datasources skip field-name redaction and the low-confidence detectors (IP, phone); secret, email, IBAN and card detectors always run. | Must | Verified | `secrets_are_masked_even_on_non_personal_datasources`; DEC-017 |
 | DASHR-PRIV-006 | Strings are truncated, rows capped, labels and nested values masked, and values without a field description replaced. | Must | Verified | `rows_are_capped_and_long_strings_truncated`, `labels_are_masked_by_key_and_value`, `values_without_field_descriptions_are_not_trusted`. |
 | DASHR-PRIV-007 | Users add patterns and deny tokens in configuration; invalid patterns are rejected. | Should | Verified | `extra_patterns_apply`, `config::Config::validate`. |
 
@@ -231,7 +231,7 @@ Crates:
 | DASHR-AWS-001 | New-console, execution and old-console URLs parse to region, pipeline and execution; anything else is refused. | Must | Verified | `url::tests::*`. |
 | DASHR-AWS-002 | CloudFormation deploy actions yield stack names (once per stack and region); other deploy providers produce a warning. | Must | Verified | `finds_cloudformation_stacks_once_each`. |
 | DASHR-AWS-003 | Stack resources classify into log groups, queues (DLQ detection), state machines and Lambdas, following nested stacks. | Must | Verified | `classifies_resources`, `discover_follows_nested_stacks_through_a_fake_cli`. |
-| DASHR-AWS-004 | A first dashboard is proposed: stage table, error logs, queue depth/age, DLQ stat, Step Functions and Lambda metrics; it validates and has no overlapping panels. | Must | Verified | `every_resource_kind_gets_panels_with_valid_queries`, `many_log_groups_are_chunked`. |
+| DASHR-AWS-004 | A first dashboard is proposed: stage table, error logs, queue depth/age, DLQ stat, Step Functions and Lambda metrics; it validates and has no overlapping panels. | Must | Verified | AC-PIPELINE; `every_resource_kind_gets_panels_with_valid_queries` |
 | DASHR-AWS-005 | Resource names are infrastructure metadata and are returned unmasked; error text from AWS is masked. | Should | Implemented | `session::start` masks bootstrap errors. |
 | DASHR-AWS-006 | AWS is reached only through the `aws` CLI; dashr holds no AWS credentials of its own beyond passing exported ones to the container. | Must | Implemented | `dashr_aws::cli`. |
 
@@ -239,8 +239,8 @@ Crates:
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-ALERT-001 | Watch rules are evaluated by the dashboard pane against real values; values never leave the pane. | Must | Implemented | `watch::evaluate`, `monitor::tick`. |
-| DASHR-ALERT-002 | A new breach marks the dashboard pane blocked with the rule wording (no values). | Must | Implemented | `a_new_breach_blocks_and_notifies_once`. |
+| DASHR-ALERT-001 | Watch rules are evaluated by the dashboard pane against real values; values never leave the pane. | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
+| DASHR-ALERT-002 | A new breach marks the dashboard pane blocked with the rule wording (no values). | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
 | DASHR-ALERT-003 | A new breach raises one Herdr notification when `monitor.notify` is on. | Should | Implemented | Same test. |
 | DASHR-ALERT-004 | When every breach clears, the pane returns to idle. | Should | Implemented | `clearing_the_last_breach_returns_to_idle`. |
 
@@ -261,17 +261,17 @@ Crates:
 | DASHR-GOV-003 | A `Verified` row must cite evidence. | Must | Implemented | `.github/scripts/check-prd-traceability.ps1`. |
 | DASHR-TECH-001 | Rust workspace, edition 2024, pinned toolchain, `unsafe_code` forbidden, clippy denied. | Must | Verified | `Cargo.toml`, `rust-toolchain.toml`. |
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Implemented | `.github/workflows/build-and-test.yml`. |
-| DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Approved | Pending |
+| DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
 | DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Approved | Pending |
 
 ## 9. Security requirements
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| DASHR-SEC-001 | No unmasked datasource value is returned by any MCP tool. | Implemented | `dashr_mcp::tools` routes every datasource value through `Masker`. |
+| DASHR-SEC-001 | No unmasked datasource value is returned by any MCP tool. | Verified | AC-MASK in `scripts/e2e/run.sh` |
 | DASHR-SEC-002 | Grafana listens on loopback only. | Verified | `run_args_store_nothing_and_bind_loopback`. |
 | DASHR-SEC-003 | No secret is written to a file or passed in argv. | Verified | `secrets_are_passed_by_name_only`, `secrets_are_env_references_never_values`. |
-| DASHR-SEC-004 | The container cannot persist data or escalate: read-only root, tmpfs, no swap, no capabilities, no-new-privileges. | Verified | `run_args_store_nothing_and_bind_loopback`. |
+| DASHR-SEC-004 | The container cannot persist data or escalate: read-only root, tmpfs, no swap, no capabilities, no-new-privileges. | Verified | AC-OPEN `docker inspect` assertions |
 | DASHR-SEC-005 | The browser profile is ephemeral. | Implemented | `open_command_points_the_profile_at_the_runtime_dir`. |
 | DASHR-SEC-006 | Screenshots of dashboards touching personal datasources are refused. | Verified | `screenshots_only_for_non_personal_dashboards`. |
 | DASHR-SEC-007 | Herdr pane state (messages, tokens) carries counts and rule wording only, because Herdr's socket has no caller authentication (#514). | Implemented | `monitor::report`. |
@@ -314,6 +314,10 @@ Crates:
 | DEC-014 | AWS through the `aws` CLI (SSO, profiles, MFA as configured), not an SDK. |
 | DEC-015 | Watches are evaluated by the pane, not by Grafana alerting, so values stay local and no alerting state is persisted. |
 | DEC-016 | The MCP protocol is hand-rolled (four methods) rather than an SDK dependency. |
+| DEC-017 | Email, IBAN, card and secret detectors run on every datasource regardless of its `personal` flag. The end-to-end suite showed a single mis-set flag leaking planted emails; the flag now only relaxes low-confidence detection. |
+| DEC-018 | `herdr pane split --ratio` is the share the original pane keeps (observed on 0.9.1); `agent.split_ratio` is passed as is. |
+| DEC-019 | The default agent argv puts the prompt before `--mcp-config`, whose Claude Code parser takes several values and swallowed the prompt. |
+| DEC-020 | `masking.testdata_personal` lets the end-to-end suite run full masking through a real Grafana using TestData CSV. |
 
 ## 13. Open questions and risks
 
@@ -331,23 +335,25 @@ Crates:
 | Date | Change | Requirements |
 |---|---|---|
 | 2026-09-26 | M0/M1: PRD, CI, governance; library crates `dashr-core`, `dashr-grafana`, `dashr-docker`, `dashr-herdr`, `dashr-aws`, `dashr-runtime`, `dashr-mcp` with unit tests. | GOV-001..003, TECH-001..002, GRAF-*, DS-*, PRIV-*, AWS-*, MCP-*, ALERT-*, PROMO-*, SEC-* |
+| 2026-09-26 | M2: `dashr` binary (Herdr actions, dashboard pane, chat pane, hooks, standalone commands, doctor), generated `herdr-plugin.toml`, `scripts/install.sh`, agent skill, end-to-end suite in CI; fixed a masking gap on non-personal datasources (DEC-017). | HERDR-001..007/009, GRAF-001..007, VIEW-001/003, CHAT-001..003, MCP-002..005/009/010, PRIV-005, AWS-004, ALERT-001/002, TECH-003, SEC-001/004 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 9 | 0 | 5 | 4 |
-| GRAF | 8 | 1 | 6 | 1 |
+| HERDR | 9 | 6 | 3 | 0 |
+| GRAF | 8 | 7 | 1 | 0 |
 | DS | 6 | 5 | 1 | 0 |
-| VIEW | 4 | 0 | 3 | 1 |
-| CHAT | 3 | 0 | 1 | 2 |
-| MCP | 10 | 2 | 8 | 0 |
+| VIEW | 4 | 1 | 3 | 0 |
+| CHAT | 3 | 2 | 1 | 0 |
+| MCP | 10 | 7 | 3 | 0 |
 | PRIV | 7 | 7 | 0 | 0 |
 | AWS | 6 | 4 | 2 | 0 |
-| ALERT | 4 | 0 | 4 | 0 |
+| ALERT | 4 | 2 | 2 | 0 |
 | PROMO | 3 | 1 | 2 | 0 |
-| GOV/TECH | 7 | 1 | 4 | 2 |
-| SEC | 8 | 5 | 3 | 0 |
+| GOV/TECH | 7 | 2 | 4 | 1 |
+| SEC | 8 | 6 | 2 | 0 |
+| **All** | 75 | 50 | 24 | 1 |
 
 ## 15. Acceptance criteria
 

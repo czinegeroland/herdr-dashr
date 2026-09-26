@@ -202,7 +202,9 @@ pub fn build(config: &Config, extra: &[DatasourceConfig]) -> Provisioning {
             all.push(datasource.clone());
         }
     }
-    all.push(testdata());
+    let mut builtin = testdata();
+    builtin.personal = config.masking.testdata_personal;
+    all.push(builtin);
 
     let explicit_default = all.iter().position(|datasource| datasource.default);
     let default_index = explicit_default.unwrap_or(0);

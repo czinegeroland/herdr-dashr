@@ -126,11 +126,13 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            // The prompt comes first: Claude Code's `--mcp-config` takes
+            // several values and would swallow anything after it.
             command: vec![
                 "claude".to_owned(),
+                "{prompt}".to_owned(),
                 "--mcp-config".to_owned(),
                 "{mcp_config}".to_owned(),
-                "{prompt}".to_owned(),
             ],
             mcp_grafana: false,
             mcp_grafana_command: "mcp-grafana".to_owned(),
@@ -188,6 +190,10 @@ pub struct MaskingConfig {
     pub allow_fields: Vec<String>,
     /// Extra value patterns (regular expressions) to replace.
     pub extra_patterns: BTreeMap<String, String>,
+    /// Treat the built-in TestData datasource as personal. Off by default:
+    /// TestData is synthetic. The end-to-end suite turns it on to exercise
+    /// full masking against a real Grafana.
+    pub testdata_personal: bool,
 }
 
 impl Default for MaskingConfig {
@@ -198,6 +204,7 @@ impl Default for MaskingConfig {
             deny_field_tokens: Vec::new(),
             allow_fields: Vec::new(),
             extra_patterns: BTreeMap::new(),
+            testdata_personal: false,
         }
     }
 }
@@ -422,7 +429,7 @@ refresh = "5s"
 enabled = true            # false: text status view instead of terminal-browser
 
 [agent]
-command = ["claude", "--mcp-config", "{mcp_config}", "{prompt}"]
+command = ["claude", "{prompt}", "--mcp-config", "{mcp_config}"]
 mcp_grafana = false       # true registers mcp-grafana; its query tools bypass masking
 
 [aws]

@@ -1,0 +1,33 @@
+name: End to end
+
+# DASHR-TECH-003: a real Herdr server, the plugin linked from this checkout,
+# a real Grafana container, and the MCP server driven over stdio
+# (scripts/e2e/run.sh). Linux only: GitHub's macOS runners have no Docker.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: end-to-end-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    name: End to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: e2e
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked --bin dashr
+      - run: scripts/e2e/run.sh target/debug/dashr
