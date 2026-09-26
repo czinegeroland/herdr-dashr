@@ -19,6 +19,12 @@ agent underneath to reshape it.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
+**Status:** v0.1.0. 70 of 75 requirements verified, most by an end-to-end
+suite that runs a real Herdr and a real Grafana in CI. The terminal-browser
+view is implemented but has not yet been checked by hand in a kitty-graphics
+terminal (PRD OQ-007); without it the pane shows a text status view.
+terminal-browser refuses to run as root.
+
 ## Install
 
 ```bash
