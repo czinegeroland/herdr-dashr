@@ -22,9 +22,11 @@ import { basename, join } from 'node:path'
 const ROOT_PACKAGE = 'herdr-dashr'
 const REPOSITORY = 'https://github.com/czinegeroland/herdr-dashr'
 
-// Unscoped platform package names: a scope must be an npm user or org that
-// already exists, and publishing under one you do not own fails with a bare
-// E404 (herdr-remote-channel learned this on its first publish).
+// Platform packages are unscoped (`herdr-dashr-<suffix>`), as in
+// herdr-remote-channel, except where `name` overrides it: npm's spam filter
+// refused the new name `herdr-dashr-win32-x64` ("Package name triggered spam
+// detection"), so Windows is published under the owner's own scope. A scope
+// must be an npm user or org you own, or publishing fails with a bare E404.
 //
 // Keep in step with `npm/dashr/bin.js`, `scripts/install.sh` and the release
 // matrix; `crates/dashr-cli/tests/distribution.rs` holds them together.
@@ -34,7 +36,7 @@ const TARGETS = [
   { target: 'x86_64-apple-darwin', suffix: 'darwin-x64', os: 'darwin', cpu: 'x64', ext: '.tar.gz', binary: 'dashr' },
   { target: 'aarch64-apple-darwin', suffix: 'darwin-arm64', os: 'darwin', cpu: 'arm64', ext: '.tar.gz', binary: 'dashr' },
   // As herdr-remote-channel: Windows ships a .zip holding dashr.exe.
-  { target: 'x86_64-pc-windows-msvc', suffix: 'win32-x64', os: 'win32', cpu: 'x64', ext: '.zip', binary: 'dashr.exe' },
+  { target: 'x86_64-pc-windows-msvc', suffix: 'win32-x64', os: 'win32', cpu: 'x64', ext: '.zip', binary: 'dashr.exe', name: '@czinegeroland/herdr-dashr-win32-x64' },
 ]
 
 function arg(name) {
@@ -101,7 +103,7 @@ function main() {
     chmodSync(join(dir, platform.binary), 0o755)
     rmSync(staging, { recursive: true, force: true })
 
-    const name = `${ROOT_PACKAGE}-${platform.suffix}`
+    const name = platform.name ?? `${ROOT_PACKAGE}-${platform.suffix}`
     writeFileSync(
       join(dir, 'package.json'),
       `${JSON.stringify(

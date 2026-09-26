@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T01:00:00Z |
+| Last updated | 2026-09-27T01:15:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -272,7 +272,7 @@ Crates:
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
 | DASHR-TECH-004 | Releases publish Linux, macOS and Windows binaries with SHA-256 checksums (`.tar.gz`, `.zip` for Windows). | Must | Implemented | `.github/workflows/release.yml`: 5 targets including `x86_64-pc-windows-msvc`; `release_packaging_shim_and_installer_list_the_same_platforms`; v0.1.1 pending |
-| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (five, with `herdr-dashr-win32-x64`) (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | v0.1.0 published with four platform packages by `.github/workflows/npm-publish.yml`; `scripts/build-npm-packages.mjs` now packs the Windows `.zip` as `herdr-dashr-win32-x64`; `crates/dashr-cli/tests/distribution.rs`; v0.1.1: the Linux and macOS packages were accepted, but npm refused the new name `herdr-dashr-win32-x64` ("Package name triggered spam detection"), so `herdr-dashr` 0.1.1 is not published yet; a re-run now tolerates registry lag |
+| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (five; Windows as `@czinegeroland/herdr-dashr-win32-x64`, because npm's spam filter refused the unscoped name) (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | v0.1.0 published with four platform packages by `.github/workflows/npm-publish.yml`; `scripts/build-npm-packages.mjs` packs the Windows `.zip` as `@czinegeroland/herdr-dashr-win32-x64`; `crates/dashr-cli/tests/distribution.rs`; v0.1.1: the four Unix packages are published, and the scoped Windows package plus `herdr-dashr` 0.1.1 follow from a re-run of Publish to npm |
 
 ### 8.12 Agent skill (SKILL)
 
@@ -431,6 +431,7 @@ Crates:
 | 2026-09-27 | npm publish retries survive registry lag: a version the registry refuses as already published counts as published, so re-running a half-finished publish completes it. | TECH-005 |
 | 2026-09-27 | A chat pane that fails to open, or whose id fails to save, is reported on the text view: the view clears the screen, which had hidden the reason when AC-OPEN intermittently found no chat pane. | HERDR-002 |
 | 2026-09-27 | The fake-CLI unit tests create their scripts with `cp`, so a write handle can no longer leak into a parallel test's fork and fail the run with ETXTBSY ("Text file busy"), as it did on Linux CI. | none (test robustness) |
+| 2026-09-27 | The Windows npm package is published as `@czinegeroland/herdr-dashr-win32-x64`: npm's spam filter refused `herdr-dashr-win32-x64` on every attempt. The launcher maps each platform to its full package name. The v0.1.1 release is unchanged, and its publish is re-run with the new packaging. | TECH-005 |
 
 ### Requirement completion summary
 
