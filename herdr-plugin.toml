@@ -8,59 +8,64 @@
 
 id = "herdr-dashr"
 name = "Herdr Dashr"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.9.0"
 description = "Agent-built, live Grafana dashboards in a Herdr pane, with masking between your data and the agent."
+platforms = ["linux", "macos", "windows"]
+
+[[build]]
+command = ["cmd", "/c", "npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.1"]
+platforms = ["windows"]
+
+[[build]]
+command = ["npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.1"]
 platforms = ["linux", "macos"]
 
 [[build]]
-command = ["sh", "scripts/install.sh"]
-
-[[build]]
-command = ["bin/dashr", "skill", "install", "--best-effort"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "skill", "install", "--best-effort"]
 
 [[startup]]
-command = ["bin/dashr", "herdr", "startup"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "startup"]
 
 [[actions]]
 id = "open"
 title = "Open live dashboard"
 contexts = ["workspace", "pane"]
-command = ["bin/dashr", "herdr", "action", "open"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "action", "open"]
 
 [[actions]]
 id = "pipeline"
 title = "Open dashboard for a CodePipeline"
 contexts = ["workspace", "pane"]
-command = ["bin/dashr", "herdr", "action", "pipeline"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "action", "pipeline"]
 
 [[actions]]
 id = "otel"
 title = "Open live logs and traces (OpenTelemetry)"
 contexts = ["workspace", "pane"]
-command = ["bin/dashr", "herdr", "action", "otel"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "action", "otel"]
 
 [[actions]]
 id = "promote"
 title = "Promote dashboard to persistent Grafana"
 contexts = ["workspace", "pane"]
-command = ["bin/dashr", "herdr", "action", "promote"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "action", "promote"]
 
 [[actions]]
 id = "doctor"
 title = "Check dashr prerequisites"
 contexts = ["workspace", "pane"]
-command = ["bin/dashr", "herdr", "action", "doctor"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "action", "doctor"]
 
 [[events]]
 on = "pane.closed"
-command = ["bin/dashr", "herdr", "event", "pane-closed"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "event", "pane-closed"]
 
 [[panes]]
 id = "dashboard"
 title = "dashr"
 placement = "tab"
-command = ["bin/dashr", "herdr", "pane", "dashboard"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "pane", "dashboard"]
 
 [[panes]]
 id = "doctor"
@@ -68,7 +73,7 @@ title = "dashr doctor"
 placement = "popup"
 width = "80%"
 height = "70%"
-command = ["bin/dashr", "herdr", "pane", "doctor"]
+command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "pane", "doctor"]
 
 [[link_handlers]]
 id = "codepipeline"

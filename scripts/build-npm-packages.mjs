@@ -29,10 +29,12 @@ const REPOSITORY = 'https://github.com/czinegeroland/herdr-dashr'
 // Keep in step with `npm/dashr/bin.js`, `scripts/install.sh` and the release
 // matrix; `crates/dashr-cli/tests/distribution.rs` holds them together.
 const TARGETS = [
-  { target: 'x86_64-unknown-linux-gnu', suffix: 'linux-x64', os: 'linux', cpu: 'x64' },
-  { target: 'aarch64-unknown-linux-gnu', suffix: 'linux-arm64', os: 'linux', cpu: 'arm64' },
-  { target: 'x86_64-apple-darwin', suffix: 'darwin-x64', os: 'darwin', cpu: 'x64' },
-  { target: 'aarch64-apple-darwin', suffix: 'darwin-arm64', os: 'darwin', cpu: 'arm64' },
+  { target: 'x86_64-unknown-linux-gnu', suffix: 'linux-x64', os: 'linux', cpu: 'x64', ext: '.tar.gz', binary: 'dashr' },
+  { target: 'aarch64-unknown-linux-gnu', suffix: 'linux-arm64', os: 'linux', cpu: 'arm64', ext: '.tar.gz', binary: 'dashr' },
+  { target: 'x86_64-apple-darwin', suffix: 'darwin-x64', os: 'darwin', cpu: 'x64', ext: '.tar.gz', binary: 'dashr' },
+  { target: 'aarch64-apple-darwin', suffix: 'darwin-arm64', os: 'darwin', cpu: 'arm64', ext: '.tar.gz', binary: 'dashr' },
+  // As herdr-remote-channel: Windows ships a .zip holding dashr.exe.
+  { target: 'x86_64-pc-windows-msvc', suffix: 'win32-x64', os: 'win32', cpu: 'x64', ext: '.zip', binary: 'dashr.exe' },
 ]
 
 function arg(name) {
@@ -75,7 +77,7 @@ function main() {
   const verified = []
 
   for (const platform of TARGETS) {
-    const archive = join(artifacts, `dashr-${version}-${platform.target}.tar.gz`)
+    const archive = join(artifacts, `dashr-${version}-${platform.target}${platform.ext}`)
     if (!existsSync(archive)) {
       throw new Error(`${basename(archive)} is missing; every supported platform must be published together`)
     }
@@ -85,13 +87,18 @@ function main() {
     const staging = join(out, `.unpack-${platform.suffix}`)
     mkdirSync(dir, { recursive: true })
     mkdirSync(staging, { recursive: true })
-    execFileSync('tar', ['-xzf', archive, '-C', staging])
-    const unpacked = join(staging, 'dashr')
-    if (!existsSync(unpacked)) {
-      throw new Error(`${basename(archive)} does not contain a top-level dashr executable`)
+    // Unpacked with the platform's own tool rather than a bundled extractor.
+    if (platform.ext === '.zip') {
+      execFileSync('unzip', ['-q', '-o', archive, '-d', staging])
+    } else {
+      execFileSync('tar', ['-xzf', archive, '-C', staging])
     }
-    copyFileSync(unpacked, join(dir, 'dashr'))
-    chmodSync(join(dir, 'dashr'), 0o755)
+    const unpacked = join(staging, platform.binary)
+    if (!existsSync(unpacked)) {
+      throw new Error(`${basename(archive)} does not contain a top-level ${platform.binary} executable`)
+    }
+    copyFileSync(unpacked, join(dir, platform.binary))
+    chmodSync(join(dir, platform.binary), 0o755)
     rmSync(staging, { recursive: true, force: true })
 
     const name = `${ROOT_PACKAGE}-${platform.suffix}`
@@ -106,7 +113,7 @@ function main() {
           repository: { type: 'git', url: `git+${REPOSITORY}.git` },
           os: [platform.os],
           cpu: [platform.cpu],
-          files: ['dashr'],
+          files: [platform.binary],
         },
         null,
         2,

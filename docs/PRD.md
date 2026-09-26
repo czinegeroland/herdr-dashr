@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-26T22:10:00Z |
+| Last updated | 2026-09-27T00:30:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -159,9 +159,9 @@ Crates:
 | DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Verified | AC-PIPELINE in `scripts/e2e/run.sh`; `link_pattern_matches_both_consoles` |
 | DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Verified | Startup reaper scenario in `scripts/e2e/run.sh` |
 | DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
-| DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step installs the prebuilt binary from npm, else the checksum-verified GitHub release, falling back to `cargo` only when neither exists. | Must | Verified | `scripts/install.sh` (npm → GitHub release → cargo); v0.2.0 installed with no cargo on PATH from the GitHub release and, against a local registry, from npm |
+| DASHR-HERDR-006 | Installing needs no Rust toolchain and no shell: the build step runs `npm install --no-save herdr-dashr@<version>` (through `cmd /c` on Windows), pinned to the manifest version, and every entry point runs `node node_modules/herdr-dashr/bin.js`, as herdr-remote-channel does (DEC-038). | Must | Implemented | `installs_from_npm_on_every_platform_including_windows`; e2e runs every Herdr entry point through the launcher (`scripts/e2e/run.sh`); v0.1.1 on npm and a real Windows install pending |
 | DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
-| DASHR-HERDR-008 | The plugin declares and supports Linux and macOS. | Must | Verified | Manifest `platforms`; tests on both in `.github/workflows/build-and-test.yml`; v0.1.0 binaries for x86_64/aarch64 Linux and macOS; e2e on Linux |
+| DASHR-HERDR-008 | The plugin declares and supports Linux, macOS and Windows. | Must | Implemented | Manifest `platforms`; unit tests on all three in `.github/workflows/build-and-test.yml` (Windows also run under Wine before merging); e2e on Linux; a real Windows install pending |
 | DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
 
 ### 8.2 Grafana lifecycle (GRAF)
@@ -271,8 +271,8 @@ Crates:
 | DASHR-TECH-001 | Rust workspace, edition 2024, pinned toolchain, `unsafe_code` forbidden, clippy denied. | Must | Verified | `Cargo.toml`, `rust-toolchain.toml`. |
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
-| DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Verified | Release v0.1.0 by `.github/workflows/release.yml`: 4 targets, each with a `.sha256` |
-| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Verified | v0.1.0 published by `.github/workflows/npm-publish.yml`: `herdr-dashr` and its four platform packages at 0.1.0 on registry.npmjs.org, `latest` tag, built by `scripts/build-npm-packages.mjs` from the checksummed release archives; `npx herdr-dashr@0.1.0 --version` prints `dashr 0.1.0`; `crates/dashr-cli/tests/distribution.rs` |
+| DASHR-TECH-004 | Releases publish Linux, macOS and Windows binaries with SHA-256 checksums (`.tar.gz`, `.zip` for Windows). | Must | Implemented | `.github/workflows/release.yml`: 5 targets including `x86_64-pc-windows-msvc`; `release_packaging_shim_and_installer_list_the_same_platforms`; v0.1.1 pending |
+| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (five, with `herdr-dashr-win32-x64`) (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | v0.1.0 published with four platform packages by `.github/workflows/npm-publish.yml`; `scripts/build-npm-packages.mjs` now packs the Windows `.zip` as `herdr-dashr-win32-x64`; `crates/dashr-cli/tests/distribution.rs`; v0.1.1 with five packages pending |
 
 ### 8.12 Agent skill (SKILL)
 
@@ -391,6 +391,7 @@ Crates:
 | DEC-035 | Saved dashboards are JSON files in the plugin state directory (`dashboards/<name>.json`), not in Grafana: every session's Grafana is disposable, and a file per dashboard is easy to inspect, back up or delete. File names are the lowercased, sanitised name, so names differing only in case are one dashboard on every file system. Each file records the datasource uids its panels use, so a load can refuse up front instead of applying a dashboard whose panels would all fail. |
 | DEC-036 | Configured datasources that reuse a uid of the OpenTelemetry image are left out of provisioning, with a warning, when OpenTelemetry mode is switched on at run time. The configuration check only runs when `[otel] enabled` is in the file, so the action and `--otel` let two datasources share a uid, and which one Grafana kept depended on file order (found while writing the saved-dashboards scenario, whose configuration has a `Loki` datasource). |
 | DEC-037 | One public release. The earlier v0.1.0 and v0.2.0 GitHub releases (never published to npm) are deleted with their tags, and the version returns to 0.1.0: the first release anyone installs is v0.1.0 with every feature to date. `Delete release` (`.github/workflows/delete-release.yml`, manual, the tag typed twice) removes a release and its tag for sessions that cannot delete tags. Ledger rows naming v0.2.0 and v0.3.0 describe work that is now part of v0.1.0. |
+| DEC-038 | The plugin installs the way herdr-remote-channel does: `platforms` includes Windows, the build step is `npm install --no-save herdr-dashr@<version>` (via `cmd /c` on Windows, where `npm` is `npm.cmd`), and entry points run `node node_modules/herdr-dashr/bin.js`, since `node` resolves under any spawning model. `sh scripts/install.sh` had been skipped by Herdr on the first Windows install, leaving a plugin with no binary. This supersedes DEC-028's choice of running `bin/dashr` without Node. On Windows the chat pane command is quoted for PowerShell, and there is no SIGHUP: the `pane.closed` hook and the startup reaper stop the container. `scripts/install.sh` remains a Unix standalone installer. |
 
 ## 13. Open questions and risks
 
@@ -426,12 +427,13 @@ Crates:
 | 2026-09-26 | Versions consolidated into a single public v0.1.0 (DEC-037): version reset to 0.1.0, `Delete release` workflow to remove the earlier v0.1.0 and v0.2.0 releases before re-releasing; `NPM_TOKEN` set, so v0.1.0 is the first npm publish. The end-to-end metric check now probes with an instant query: a range query shows a point sent "now" only after the next step boundary, which made the 10 s check pass or fail by clock alignment. | TECH-005 |
 | 2026-09-26 | v0.1.0 released on GitHub (4 checksummed archives). Publish to npm was refused (E404 for a new package: the token may not create packages); it now checks the token first and fails fast on permission errors. The dashboard pane retries opening the chat pane for a few seconds (twice, on the first open after a fresh Herdr server, the split was refused and the agent never started), and the e2e suite prints the pane when that check fails. | TECH-005 |
 | 2026-09-26 | v0.1.0 published to npm (`herdr-dashr` + four platform packages); `npx herdr-dashr@0.1.0` runs the release binary. Every PRD requirement is Verified. | TECH-005 |
+| 2026-09-27 | Windows support, installed as herdr-remote-channel installs (DEC-038): npm build step and `node` launcher on every platform, a Windows release target and npm package, PowerShell quoting for the chat pane, Windows unit tests in CI. Version 0.1.1. | HERDR-006, HERDR-008, TECH-004, TECH-005 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 9 | 9 | 0 | 0 |
+| HERDR | 9 | 7 | 2 | 0 |
 | GRAF | 8 | 8 | 0 | 0 |
 | DS | 6 | 6 | 0 | 0 |
 | VIEW | 4 | 4 | 0 | 0 |
@@ -445,9 +447,9 @@ Crates:
 | OTEL | 6 | 6 | 0 | 0 |
 | LOGX | 5 | 5 | 0 | 0 |
 | LIB | 4 | 4 | 0 | 0 |
-| GOV/TECH | 8 | 8 | 0 | 0 |
+| GOV/TECH | 8 | 6 | 2 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 97 | 97 | 0 | 0 |
+| **All** | 97 | 93 | 4 | 0 |
 
 ## 15. Acceptance criteria
 

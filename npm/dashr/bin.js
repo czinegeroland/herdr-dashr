@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join, sep } from 'node:path'
 
 const require = createRequire(import.meta.url)
-const binary = 'dashr'
+const binary = process.platform === 'win32' ? 'dashr.exe' : 'dashr'
 
 // Keep in step with `scripts/build-npm-packages.mjs`, `scripts/install.sh`
 // and the release matrix; `crates/dashr-cli/tests/distribution.rs` holds them
@@ -26,6 +26,7 @@ const PACKAGES = {
   'linux arm64': 'linux-arm64',
   'darwin x64': 'darwin-x64',
   'darwin arm64': 'darwin-arm64',
+  'win32 x64': 'win32-x64',
 }
 
 // Run from `npm/dashr` inside a source checkout (a symlinked

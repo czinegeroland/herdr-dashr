@@ -239,11 +239,18 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
 
     // Signals first: a pane closed during startup still cleans up.
     let stop = Arc::new(AtomicBool::new(false));
-    for signal in [
+    // SIGHUP is what Herdr sends on Unix when the pane closes. Windows has
+    // no SIGHUP: there the pane.closed hook and the startup reaper stop the
+    // container (DEC-038).
+    #[cfg(unix)]
+    let signals = [
         signal_hook::consts::SIGINT,
         signal_hook::consts::SIGTERM,
         signal_hook::consts::SIGHUP,
-    ] {
+    ];
+    #[cfg(not(unix))]
+    let signals = [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM];
+    for signal in signals {
         signal_hook::flag::register(signal, Arc::clone(&stop))
             .map_err(|error| error.to_string())?;
     }
@@ -549,8 +556,13 @@ mod tests {
             vec!["claude", "hi 'there'", "--mcp-config", "/r/mcp.json"]
         );
         assert_eq!(
-            dashr_core::shell::join(&argv),
+            dashr_core::shell::join_posix(&argv),
             r"claude 'hi '\''there'\''' --mcp-config /r/mcp.json"
+        );
+        // What the chat pane's PowerShell gets on Windows.
+        assert_eq!(
+            dashr_core::shell::join_powershell(&argv),
+            "& claude 'hi ''there''' '--mcp-config' /r/mcp.json"
         );
     }
 

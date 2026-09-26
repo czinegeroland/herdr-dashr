@@ -350,10 +350,17 @@ mod tests {
                 )
             })
             .collect();
-        assert!(env.contains(&(
-            PROFILE_ENV.to_owned(),
-            Some("/dev/shm/herdr-dashr/s/browser".to_owned())
-        )));
+        assert!(
+            env.contains(&(
+                PROFILE_ENV.to_owned(),
+                Some(
+                    Path::new("/dev/shm/herdr-dashr/s")
+                        .join("browser")
+                        .display()
+                        .to_string()
+                )
+            ))
+        );
     }
 
     #[test]
@@ -369,6 +376,7 @@ mod tests {
         assert_eq!(browser_locale(Some(""), Some("de_DE.UTF-8")), None);
     }
 
+    #[cfg(unix)] // uses `sh`
     #[test]
     fn missing_browser() {
         let browser = Browser::new("definitely-not-a-browser-xyz");

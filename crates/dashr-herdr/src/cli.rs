@@ -409,6 +409,7 @@ mod tests {
         assert_eq!(cap(&long).chars().count(), 80);
     }
 
+    #[cfg(unix)] // uses `sh`
     #[test]
     fn errors_are_reported_from_the_envelope() {
         // `sh -c` stands in for herdr: prints an error envelope, exits 1.
