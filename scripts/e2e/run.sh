@@ -22,7 +22,8 @@ fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
 cleanup() {
   herdr server stop >/dev/null 2>&1 || true
   docker ps -q --filter label=herdr.dashr=1 | xargs -r docker rm -f >/dev/null 2>&1 || true
-  docker rm -f dashr-e2e-orphan >/dev/null 2>&1 || true
+  docker rm -f dashr-e2e-orphan dashr-e2e-foreign dashr-e2e-target >/dev/null 2>&1 || true
+  [ -n "${STANDALONE_STATE:-}" ] && "$ROOT/bin/dashr" --state-dir "$STANDALONE_STATE" --config-dir "$STANDALONE_CONFIG" session stop local-image >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -49,6 +50,20 @@ docker pull -q grafana/grafana:12.1.1 >/dev/null
 mkdir -p "$ROOT/bin"
 install -m 0755 "$DASHR_BUILT" "$ROOT/bin/dashr"
 ok "herdr, docker and dashr ready"
+
+log "persistent Grafana for promote"
+docker run -d --name dashr-e2e-target -p 127.0.0.1::3000 -e GF_SECURITY_ADMIN_PASSWORD=e2e-admin grafana/grafana:12.1.1 >/dev/null
+TARGET_PORT="$(docker port dashr-e2e-target 3000/tcp | head -n 1 | cut -d: -f2)"
+TARGET="http://127.0.0.1:$TARGET_PORT"
+wait_for 90 "curl -fsS $TARGET/api/health | grep -q ok" || fail "target Grafana did not start"
+curl -fsS -u admin:e2e-admin -H 'content-type: application/json' -X POST "$TARGET/api/datasources" \
+  -d '{"name":"TestData","type":"grafana-testdata-datasource","access":"proxy"}' >/dev/null
+SA_ID="$(curl -fsS -u admin:e2e-admin -H 'content-type: application/json' -X POST "$TARGET/api/serviceaccounts" \
+  -d '{"name":"dashr-e2e","role":"Admin"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+DASHR_PROMOTE_TOKEN="$(curl -fsS -u admin:e2e-admin -H 'content-type: application/json' -X POST "$TARGET/api/serviceaccounts/$SA_ID/tokens" \
+  -d '{"name":"e2e"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["key"])')"
+export DASHR_PROMOTE_TOKEN
+ok "target Grafana with a TestData datasource and a service-account token"
 
 log "herdr server and plugin"
 herdr server >"$WORK/server.log" 2>&1 &
@@ -87,6 +102,11 @@ interval_secs = 2
 
 [aws]
 cli = "$WORK/aws"
+
+[promote]
+url = "$TARGET"
+token_env = "DASHR_PROMOTE_TOKEN"
+folder = "dashr-e2e"
 
 [[datasources]]
 name = "Loki"
@@ -203,6 +223,45 @@ wait_for 30 "herdr pane get $PANE | grep -q '\"agent_status\":\"blocked\"'" || f
 herdr pane get "$PANE" | grep -q 'alert' || fail "token does not mention the alert"
 ok "pane $PANE blocked, token: $(herdr pane get "$PANE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["tokens"]["dashr"])')"
 
+log "watch removal, get_dashboard, promote"
+cat >"$WORK/script2.json" <<'EOF2'
+[
+  {"tool": "remove_watch", "arguments": {"id": "w1"}},
+  {"tool": "get_dashboard"},
+  {"tool": "promote"},
+  {"tool": "apply_dashboard", "arguments": {"dashboard": {"title": "e2e promotable", "panels": [
+    {"id": 1, "type": "timeseries", "title": "Walk", "datasource": {"uid": "dashr-testdata"},
+     "targets": [{"refId": "A", "scenarioId": "random_walk"}]}]}}},
+  {"tool": "promote", "arguments": {"title": "e2e promoted"}}
+]
+EOF2
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$SESSION" "$WORK/script2.json" >"$WORK/mcp2.out"
+python3 - "$WORK/mcp2.out" "$DASHR_PROMOTE_TOKEN" <<'EOF2' || fail "watch/promote assertions failed"
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1])]
+by = {}
+for line in lines:
+    by.setdefault(line["tool"], []).append(line)
+assert not by["remove_watch"][0]["isError"], by["remove_watch"][0]["text"]
+model = json.loads(by["get_dashboard"][0]["text"])["dashboard"]
+assert model["title"] == "e2e" and "dashr" in model["tags"], model["title"]
+first, second = by["promote"]
+assert first["isError"] and "Loki" in first["text"], first["text"]
+assert not second["isError"], second["text"]
+promoted = json.loads(second["text"])
+assert promoted["folder"] == "dashr-e2e" and promoted["url"].startswith("http://127.0.0.1:")
+assert sys.argv[2] not in open(sys.argv[1]).read(), "token leaked into tool output"
+EOF2
+wait_for 30 "herdr pane get $PANE | grep -q '\"agent_status\":\"idle\"'" || fail "pane did not return to idle after the watch was removed"
+ok "removed watch returns the pane to idle"
+curl -fsS -u admin:e2e-admin "$TARGET/api/search?query=e2e%20promoted" | grep -q '"folderTitle":"dashr-e2e"' \
+  || fail "promoted dashboard not found in the target folder"
+PROMOTED_UID="$(curl -fsS -u admin:e2e-admin "$TARGET/api/search?query=e2e%20promoted" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["uid"])')"
+TARGET_DS="$(curl -fsS -u admin:e2e-admin "$TARGET/api/datasources/name/TestData" | python3 -c 'import json,sys; print(json.load(sys.stdin)["uid"])')"
+curl -fsS -u admin:e2e-admin "$TARGET/api/dashboards/uid/$PROMOTED_UID" | grep -q "\"uid\":\"$TARGET_DS\"" \
+  || fail "promoted dashboard does not use the target's TestData uid"
+ok "get_dashboard works; promote refuses a missing datasource, then promotes with datasources remapped by name"
+
 log "AC-CLOSE: closing the pane removes everything"
 RUNTIME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_dir"])' "$RECORD")"
 herdr pane close "$PANE" >/dev/null
@@ -227,6 +286,22 @@ echo "$MODEL" | grep -q 'DLQ orders-dlq' || fail "DLQ panel missing"
 echo "$MODEL" | grep -q 'api-handler' || fail "Lambda panel missing"
 curl -fsS "http://127.0.0.1:$PORT/api/datasources/uid/dashr-cloudwatch-eu-west-1" | grep -q eu-west-1 || fail "CloudWatch datasource missing"
 ok "pipeline dashboard applied with DLQ and Lambda panels and a CloudWatch (eu-west-1) datasource"
+docker inspect "herdr-grafana-$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$RECORD")" \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^AWS_ACCESS_KEY_ID=ASIAE2EFAKE$' \
+  || fail "exported AWS credentials did not reach the container"
+ok "exported short-lived AWS credentials reached the container by name"
+PSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$RECORD")"
+echo "[{\"tool\": \"open_for_pipeline\", \"arguments\": {\"url\": \"$URL\"}}]" >"$WORK/script3.json"
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$PSESSION" "$WORK/script3.json" >"$WORK/mcp3.out"
+python3 - "$WORK/mcp3.out" <<'EOF2' || fail "open_for_pipeline failed"
+import json, sys
+line = [json.loads(l) for l in open(sys.argv[1])][-1]
+assert not line["isError"], line["text"]
+result = json.loads(line["text"])
+assert result["applied"] and result["applied"] > 1, result
+assert result["inventory"]["resources"]["lambdas"] == ["api-handler"]
+EOF2
+ok "open_for_pipeline re-inspects and applies in place"
 herdr pane close "$PANE" >/dev/null
 wait_for 30 "! docker ps --filter label=herdr.dashr=1 -q | grep -q ." || fail "pipeline container still running"
 
@@ -242,5 +317,33 @@ wait_for 20 "! docker ps --format '{{.Names}}' | grep -q dashr-e2e-orphan" || fa
 docker ps --format '{{.Names}}' | grep -q dashr-e2e-foreign || fail "another server's container was reaped"
 docker rm -f dashr-e2e-foreign >/dev/null
 ok "orphan of this server reaped; another server's container left alone"
+
+log "doctor"
+"$ROOT/bin/dashr" --config-dir "$CONFIG_DIR" --state-dir "$STATE_DIR" doctor >"$WORK/doctor.out" || { cat "$WORK/doctor.out"; fail "doctor failed"; }
+grep -q 'docker' "$WORK/doctor.out" && grep -q 'terminal-browser' "$WORK/doctor.out" || fail "doctor output incomplete"
+ok "doctor passes required checks and reports optional ones"
+
+log "custom image with Infinity and Zabbix"
+"$ROOT/bin/dashr" image build --tag herdr-dashr-grafana:e2e >"$WORK/image.log" 2>&1 || { tail -30 "$WORK/image.log"; fail "image build failed"; }
+STANDALONE_STATE="$WORK/standalone-state"; STANDALONE_CONFIG="$WORK/standalone-config"
+mkdir -p "$STANDALONE_CONFIG"
+cat >"$STANDALONE_CONFIG/dashr.toml" <<EOF2
+[grafana]
+image = "herdr-dashr-grafana:e2e"
+
+[[datasources]]
+name = "Seq"
+kind = "seq"
+url = "http://localhost:5341"
+personal = true
+EOF2
+"$ROOT/bin/dashr" --state-dir "$STANDALONE_STATE" --config-dir "$STANDALONE_CONFIG" session start --name image >"$WORK/image-session.json"
+IPORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"].split(":")[2].split("/")[0])' "$WORK/image-session.json")"
+curl -fsS "http://127.0.0.1:$IPORT/api/plugins/yesoreyeram-infinity-datasource/settings" | grep -q '"id":"yesoreyeram-infinity-datasource"' \
+  || fail "Infinity plugin not loaded from the custom image"
+curl -fsS "http://127.0.0.1:$IPORT/api/datasources/uid/seq" | grep -q '"type":"yesoreyeram-infinity-datasource"' \
+  || fail "Seq datasource not provisioned through Infinity"
+"$ROOT/bin/dashr" --state-dir "$STANDALONE_STATE" --config-dir "$STANDALONE_CONFIG" session stop local-image >/dev/null
+ok "custom image loads Infinity from outside the tmpfs; Seq provisioned through it"
 
 log "all $PASS checks passed"
