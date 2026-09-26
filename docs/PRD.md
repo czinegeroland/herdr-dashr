@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | M3 - Releases |
-| Last updated | 2026-09-26T02:30:00Z |
+| Last updated | 2026-09-26T03:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -184,17 +184,17 @@ Crates:
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser. | Must | Implemented | `pane::dashboard` spawns `Browser::open_command`; not exercised in CI (no kitty terminal) |
-| DASHR-VIEW-002 | The browser profile lives in the session runtime directory via `TERMINAL_BROWSER_APPDATA` and is deleted with it. | Must | Implemented | `open_command_points_the_profile_at_the_runtime_dir`. |
+| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser. | Must | Implemented | `pane::dashboard` spawns `Browser::open_command`; needs a kitty-graphics client (OQ-007) |
+| DASHR-VIEW-002 | The browser profile lives in the session runtime directory via `TERMINAL_BROWSER_APPDATA` and is deleted with it. | Must | Implemented | `open_command_points_the_profile_at_the_runtime_dir`; needs a kitty-graphics client (OQ-007) |
 | DASHR-VIEW-003 | Without terminal-browser (or with `browser.enabled = false`) the pane shows a text status view: the URL and per-panel state. | Must | Verified | Text-view assertions in `scripts/e2e/run.sh` |
-| DASHR-VIEW-004 | Applying a dashboard reloads the browser showing this session. | Should | Implemented | `apply::apply`, `finds_the_browser_showing_the_session`. |
+| DASHR-VIEW-004 | Applying a dashboard reloads the browser showing this session. | Should | Implemented | `finds_the_browser_showing_the_session`; needs a kitty-graphics client (OQ-007) |
 
 ### 8.5 Chat pane (CHAT)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
 | DASHR-CHAT-001 | The chat pane runs the configured agent command with a generated MCP config naming `dashr mcp --session <id>`; `mcp-grafana` is added only when opted in. | Must | Verified | AC-OPEN chat-pane assertions; `mcp_config_names_the_session_and_paths` |
-| DASHR-CHAT-002 | The agent receives the privacy rules as MCP server instructions and an agent skill. | Must | Implemented | `dashr_mcp::tools::INSTRUCTIONS`; `.agents/skills/herdr-dashr/SKILL.md` via `dashr skill install` |
+| DASHR-CHAT-002 | The agent receives the privacy rules as MCP server instructions and an agent skill. | Must | Verified | AC-MASK asserts the privacy rules in `initialize` instructions (`scripts/e2e/run.sh`); `.agents/skills/herdr-dashr/SKILL.md` |
 | DASHR-CHAT-003 | The agent command is typed into the pane's shell with every argument POSIX-quoted. | Must | Verified | `agent_argv_substitutes_placeholders`; AC-OPEN |
 
 ### 8.6 MCP server (MCP)
@@ -232,8 +232,8 @@ Crates:
 | DASHR-AWS-002 | CloudFormation deploy actions yield stack names (once per stack and region); other deploy providers produce a warning. | Must | Verified | `finds_cloudformation_stacks_once_each`. |
 | DASHR-AWS-003 | Stack resources classify into log groups, queues (DLQ detection), state machines and Lambdas, following nested stacks. | Must | Verified | `classifies_resources`, `discover_follows_nested_stacks_through_a_fake_cli`. |
 | DASHR-AWS-004 | A first dashboard is proposed: stage table, error logs, queue depth/age, DLQ stat, Step Functions and Lambda metrics; it validates and has no overlapping panels. | Must | Verified | AC-PIPELINE; `every_resource_kind_gets_panels_with_valid_queries` |
-| DASHR-AWS-005 | Resource names are infrastructure metadata and are returned unmasked; error text from AWS is masked. | Should | Implemented | `session::start` masks bootstrap errors. |
-| DASHR-AWS-006 | AWS is reached only through the `aws` CLI; dashr holds no AWS credentials of its own beyond passing exported ones to the container. | Must | Implemented | `dashr_aws::cli`. |
+| DASHR-AWS-005 | Resource names are infrastructure metadata and are returned unmasked; error text from AWS is masked. | Should | Verified | `classifies_resources` (names returned as-is); `session::start` masks bootstrap errors with `Masker::mask_text` |
+| DASHR-AWS-006 | AWS is reached only through the `aws` CLI; dashr holds no AWS credentials of its own beyond passing exported ones to the container. | Must | Verified | `discover_follows_nested_stacks_through_a_fake_cli`, `credentials_keep_only_known_variables` |
 
 ### 8.9 Alerts (ALERT)
 
@@ -241,7 +241,7 @@ Crates:
 |---|---|---|---|---|
 | DASHR-ALERT-001 | Watch rules are evaluated by the dashboard pane against real values; values never leave the pane. | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
 | DASHR-ALERT-002 | A new breach marks the dashboard pane blocked with the rule wording (no values). | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
-| DASHR-ALERT-003 | A new breach raises one Herdr notification when `monitor.notify` is on. | Should | Implemented | Same test. |
+| DASHR-ALERT-003 | A new breach raises one Herdr notification when `monitor.notify` is on. | Should | Verified | `a_new_breach_blocks_and_notifies_once` |
 | DASHR-ALERT-004 | When every breach clears, the pane returns to idle. | Should | Verified | Watch-removal scenario in `scripts/e2e/run.sh`; `clearing_the_last_breach_returns_to_idle` |
 
 ### 8.10 Promote (PROMO)
@@ -256,13 +256,13 @@ Crates:
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-GOV-001 | Every pull request updates this PRD and its ledger, enforced by `PRD traceability`. | Must | Implemented | `.github/workflows/prd-traceability.yml`. |
-| DASHR-GOV-002 | Pull requests follow `.github/pull_request_template.md`. | Must | Implemented | `.github/pull_request_template.md`. |
-| DASHR-GOV-003 | A `Verified` row must cite evidence. | Must | Implemented | `.github/scripts/check-prd-traceability.ps1`. |
+| DASHR-GOV-001 | Every pull request updates this PRD and its ledger, enforced by `PRD traceability`. | Must | Verified | `.github/workflows/prd-traceability.yml` passed on every PR since #7 |
+| DASHR-GOV-002 | Pull requests follow `.github/pull_request_template.md`. | Must | Verified | `.github/pull_request_template.md` |
+| DASHR-GOV-003 | A `Verified` row must cite evidence. | Must | Verified | `.github/scripts/check-prd-traceability.ps1` |
 | DASHR-TECH-001 | Rust workspace, edition 2024, pinned toolchain, `unsafe_code` forbidden, clippy denied. | Must | Verified | `Cargo.toml`, `rust-toolchain.toml`. |
-| DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Implemented | `.github/workflows/build-and-test.yml`. |
+| DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
-| DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Implemented | `.github/workflows/release.yml` (4 targets, `.sha256` per archive); verified on the first tag |
+| DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Implemented | `.github/workflows/release.yml`; manual dispatch from `main` creates the tag (DEC-023); verified on the first release |
 
 ## 9. Security requirements
 
@@ -272,9 +272,9 @@ Crates:
 | DASHR-SEC-002 | Grafana listens on loopback only. | Verified | `run_args_store_nothing_and_bind_loopback`. |
 | DASHR-SEC-003 | No secret is written to a file or passed in argv. | Verified | `secrets_are_passed_by_name_only`, `secrets_are_env_references_never_values`. |
 | DASHR-SEC-004 | The container cannot persist data or escalate: read-only root, tmpfs, no swap, no capabilities, no-new-privileges. | Verified | AC-OPEN `docker inspect` assertions |
-| DASHR-SEC-005 | The browser profile is ephemeral. | Implemented | `open_command_points_the_profile_at_the_runtime_dir`. |
+| DASHR-SEC-005 | The browser profile is ephemeral. | Implemented | `open_command_points_the_profile_at_the_runtime_dir`; needs a kitty-graphics client (OQ-007) |
 | DASHR-SEC-006 | Screenshots of dashboards touching personal datasources are refused. | Verified | `screenshots_only_for_non_personal_dashboards`. |
-| DASHR-SEC-007 | Herdr pane state (messages, tokens) carries counts and rule wording only, because Herdr's socket has no caller authentication (#514). | Implemented | `monitor::report`. |
+| DASHR-SEC-007 | Herdr pane state (messages, tokens) carries counts and rule wording only, because Herdr's socket has no caller authentication (#514). | Verified | `a_new_breach_blocks_and_notifies_once`, `grafana_errors_show_in_the_token` (counts and wording only) |
 | DASHR-SEC-008 | The reaper only stops containers labelled with this Herdr server's socket hash. | Verified | `orphans_are_this_servers_containers_without_a_live_pane`, `session_ids_differ_between_servers_for_the_same_pane`. |
 
 ## 10. Non-functional requirements
@@ -320,6 +320,7 @@ Crates:
 | DEC-020 | `masking.testdata_personal` lets the end-to-end suite run full masking through a real Grafana using TestData CSV. |
 | DEC-021 | Dependency majors (ureq 3, toml 1, signal-hook 0.4, base64 0.23, actions/checkout 7) are taken together in one reviewed PR with code changes, superseding the Dependabot PRs that could not compile on their own. |
 | DEC-022 | `remove_watch` leaves breach state to the pane's monitor, which reports the rule as cleared and returns the pane to idle. Clearing it in the tool hid the transition and left the pane blocked (found by the end-to-end suite). |
+| DEC-023 | Releases can be cut by a manual run of the release workflow from `main`: it releases the manifest version and creates the tag at that commit, for sessions whose git access cannot push tags. |
 
 ## 13. Open questions and risks
 
@@ -331,6 +332,7 @@ Crates:
 | OQ-004 | Anonymous admin on loopback: any local process can reach the Grafana while the pane lives. Accepted for a single-user workstation. |
 | OQ-005 | macOS input helper of terminal-browser may need accessibility permission on managed machines. |
 | OQ-006 | CloudWatch Live Tail and Loki tail are not Grafana-native streams; panels refresh on an interval instead. |
+| OQ-007 | terminal-browser cannot be exercised in CI or a headless Herdr: it refuses to run as root and needs a terminal that answers the kitty graphics query, which a headless Herdr pane without an attached client does not. The pane falls back to the text view in that case (verified). Browser rows stay `Implemented` until checked by hand in Ghostty or kitty. |
 
 ## 14. Delivery ledger
 
@@ -340,6 +342,7 @@ Crates:
 | 2026-09-26 | M2: `dashr` binary (Herdr actions, dashboard pane, chat pane, hooks, standalone commands, doctor), generated `herdr-plugin.toml`, `scripts/install.sh`, agent skill, end-to-end suite in CI; fixed a masking gap on non-personal datasources (DEC-017). | HERDR-001..007/009, GRAF-001..007, VIEW-001/003, CHAT-001..003, MCP-002..005/009/010, PRIV-005, AWS-004, ALERT-001/002, TECH-003, SEC-001/004 |
 | 2026-09-26 | M3: release workflow publishing checksummed Linux/macOS archives for `scripts/install.sh`; dependency majors with the Grafana client ported to ureq 3. | TECH-004 |
 | 2026-09-26 | End-to-end suite extended: promote against a second real Grafana, watch removal back to idle, `get_dashboard`, `open_for_pipeline`, exported AWS credentials in the container, doctor, custom image with Infinity. Fixed `remove_watch` leaving the pane blocked (DEC-022). | HERDR-009, GRAF-007, DS-004, MCP-006..008, ALERT-004, PROMO-001..003 |
+| 2026-09-26 | Release workflow can create its own tag from a manual run; Intel macOS build on `macos-15-intel`; evidence recorded for governance, AWS, alert and skill rows; terminal-browser limitation recorded (OQ-007). | TECH-004, CHAT-002, AWS-005/006, ALERT-003, GOV-001..003, TECH-002, SEC-005/007, VIEW-001/002/004 |
 
 ### Requirement completion summary
 
@@ -349,15 +352,15 @@ Crates:
 | GRAF | 8 | 8 | 0 | 0 |
 | DS | 6 | 6 | 0 | 0 |
 | VIEW | 4 | 1 | 3 | 0 |
-| CHAT | 3 | 2 | 1 | 0 |
+| CHAT | 3 | 3 | 0 | 0 |
 | MCP | 10 | 10 | 0 | 0 |
 | PRIV | 7 | 7 | 0 | 0 |
-| AWS | 6 | 4 | 2 | 0 |
-| ALERT | 4 | 3 | 1 | 0 |
+| AWS | 6 | 6 | 0 | 0 |
+| ALERT | 4 | 4 | 0 | 0 |
 | PROMO | 3 | 3 | 0 | 0 |
-| GOV/TECH | 7 | 2 | 5 | 0 |
-| SEC | 8 | 6 | 2 | 0 |
-| **All** | 75 | 59 | 16 | 0 |
+| GOV/TECH | 7 | 6 | 1 | 0 |
+| SEC | 8 | 7 | 1 | 0 |
+| **All** | 75 | 68 | 7 | 0 |
 
 ## 15. Acceptance criteria
 
