@@ -102,6 +102,12 @@ enum Command {
         #[arg(long, conflicts_with_all = ["present", "absent"])]
         clear: bool,
     },
+    /// Dashboards saved on this machine: save a session's dashboard under a
+    /// name and load it into a later session.
+    Dashboards {
+        #[command(subcommand)]
+        command: DashboardsCommand,
+    },
     /// Inspect a CodePipeline and print the inventory and proposed dashboard.
     Pipeline {
         url: String,
@@ -156,11 +162,40 @@ enum SessionCommand {
         /// and an OTLP endpoint), whatever the configuration says.
         #[arg(long)]
         otel: bool,
+        /// Show this saved dashboard instead of the welcome dashboard.
+        #[arg(long)]
+        load: Option<String>,
     },
     /// Stop a session and delete its files.
     Stop { session: String },
     /// List sessions.
     List,
+}
+
+#[derive(Subcommand)]
+enum DashboardsCommand {
+    /// Save a session's current dashboard under a name.
+    Save {
+        name: String,
+        /// Defaults to $DASHR_SESSION, else the only running session.
+        #[arg(long)]
+        session: Option<String>,
+        /// Replace a saved dashboard with the same name.
+        #[arg(long)]
+        force: bool,
+    },
+    /// List saved dashboards, newest first.
+    List,
+    /// Replace a session's dashboard with a saved one.
+    Load {
+        name: String,
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Print a saved dashboard's JSON.
+    Show { name: String },
+    /// Delete a saved dashboard.
+    Delete { name: String },
 }
 
 #[derive(Subcommand)]
@@ -239,7 +274,10 @@ fn run(cli: Cli) -> Result<()> {
                 name,
                 pipeline,
                 otel,
-            } => standalone::session_start(&paths, &name, pipeline.as_deref(), otel),
+                load,
+            } => {
+                standalone::session_start(&paths, &name, pipeline.as_deref(), otel, load.as_deref())
+            }
             SessionCommand::Stop { session } => standalone::session_stop(&paths, &session),
             SessionCommand::List => standalone::session_list(&paths),
         },
@@ -271,6 +309,19 @@ fn run(cli: Cli) -> Result<()> {
                 clear,
             },
         ),
+        Command::Dashboards { command } => match command {
+            DashboardsCommand::Save {
+                name,
+                session,
+                force,
+            } => standalone::dashboards_save(&paths, session.as_deref(), &name, force),
+            DashboardsCommand::List => standalone::dashboards_list(&paths),
+            DashboardsCommand::Load { name, session } => {
+                standalone::dashboards_load(&paths, session.as_deref(), &name)
+            }
+            DashboardsCommand::Show { name } => standalone::dashboards_show(&paths, &name),
+            DashboardsCommand::Delete { name } => standalone::dashboards_delete(&paths, &name),
+        },
         Command::Pipeline {
             url,
             dashboard_only,

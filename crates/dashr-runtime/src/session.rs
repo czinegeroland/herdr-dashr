@@ -180,6 +180,17 @@ pub fn start(
         .map(|pipeline| vec![provisioning::cloudwatch_for_region(&pipeline.region)])
         .unwrap_or_default();
     let provisioned = provisioning::build(config, &extra);
+    if config.otel.enabled {
+        for datasource in &config.datasources {
+            let uid = datasource.effective_uid();
+            if dashr_core::config::OTEL_DATASOURCE_UIDS.contains(&uid.as_str()) {
+                warnings.push(format!(
+                    "datasource {} is not provisioned in OpenTelemetry mode: its uid {uid} is the image's own; give it another uid",
+                    datasource.name
+                ));
+            }
+        }
+    }
     let written = write_provisioning(&runtime_dir, &provisioned.datasources_file).and_then(|dir| {
         if config.otel.enabled {
             write_readable(

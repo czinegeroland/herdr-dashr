@@ -8,6 +8,7 @@
 
 pub mod apply;
 pub mod browser;
+pub mod library;
 pub mod logx;
 pub mod monitor;
 pub mod otlp;

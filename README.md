@@ -16,6 +16,8 @@ agent underneath to reshape it.
 - **CodePipeline bootstrap.** Ctrl-click a CodePipeline URL: the plugin finds
   the stacks it deployed and builds a first dashboard of their log groups,
   queues and DLQs, state machines and Lambdas before the agent says a word.
+- **Saved dashboards.** Name a dashboard you like and reopen it in any later
+  pane.
 - **OpenTelemetry and live log checks.** One pane-owned container can also
   receive OTLP logs, traces and metrics. Tell the agent which log messages
   should fire (and which must not): the dashboard shows a tile per message
@@ -66,6 +68,23 @@ from GitHub.
 Close the dashboard pane to stop Grafana; the container, runtime files and
 browser profile are deleted. The sidebar token `$dashr` shows panel health
 (`6 ok · 1 err · 1 alert`).
+
+### Saved dashboards
+
+Like a dashboard? Tell the agent *"save this as checkout debug"*. It is kept
+on this machine (panels, queries and layout — never data). In any later pane,
+*"load checkout debug"* brings it back; the agent is told which dashboards are
+saved when it starts. From the command line:
+
+```bash
+dashr dashboards save "checkout debug"      # from the running session
+dashr dashboards list
+dashr dashboards load "checkout debug"      # into the running session
+dashr session start --load "checkout debug" # a new session showing it
+```
+
+A dashboard that uses a datasource the session lacks (say, the pipeline's
+CloudWatch in an OpenTelemetry pane) is refused, naming what is missing.
 
 ### Live logs and log checks
 

@@ -10,8 +10,8 @@
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Draft |
 | PRD version | 0.3.0 |
-| Delivery phase | v0.3.0 - OpenTelemetry and live log checks |
-| Last updated | 2026-09-26T15:20:00Z |
+| Delivery phase | v0.3.0 - OpenTelemetry, live log checks, saved dashboards |
+| Last updated | 2026-09-26T16:05:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -106,6 +106,8 @@ unsolicited core pull requests, so a plugin is the only delivery path.
   send the program's logs (OTLP, or `dashr tail`) to the pane's own Loki, name
   the messages that should and must not appear, and watch a tile per message
   turn green (or red) above a live, highlighted log trail.
+- **UC-006** Keep a dashboard that proved useful: name it, and reopen it in a
+  pane next week without rebuilding it.
 
 ## 6. Architecture
 
@@ -287,7 +289,7 @@ Crates:
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
 | DASHR-OTEL-001 | OpenTelemetry mode (`[otel] enabled`, the `otel` action or `dashr session start --otel`) runs exactly one container per pane — `grafana/otel-lgtm` with Grafana, an OpenTelemetry collector, Loki, Tempo and Prometheus — with the plain Grafana's hardening except storage: logs, traces and metrics are kept on disk in anonymous volumes deleted with the container (DEC-033); Grafana and OTLP (gRPC 4317, HTTP 4318) on loopback only. The pane is ready only when the collector accepts OTLP. | Must | Verified | `otel_flavor_is_one_hardened_container_receiving_otlp_on_loopback`; AC-OTEL in `scripts/e2e/run.sh` (`docker inspect`, one container per session, volumes removed on close) |
-| DASHR-OTEL-002 | dashr knows the image's datasources and how to mask them: Loki and Tempo personal (resource and severity labels allowed), Prometheus and Pyroscope not. Configured datasources may not reuse their uids. | Must | Verified | `otel_mode_adds_the_image_datasources_to_the_policies_only`, `otel_mode_reserves_its_datasource_uids`; AC-OTEL masked log sample |
+| DASHR-OTEL-002 | dashr knows the image's datasources and how to mask them: Loki and Tempo personal (resource and severity labels allowed), Prometheus and Pyroscope not. Configured datasources may not reuse their uids: the configuration is refused, and when OpenTelemetry mode is switched on after loading it (the action, `--otel`) such a datasource is left out with a warning (DEC-036). | Must | Verified | `otel_mode_adds_the_image_datasources_to_the_policies_only`, `otel_mode_reserves_its_datasource_uids`, `otel_mode_skips_configured_datasources_that_reuse_the_image_uids`; AC-OTEL masked log sample |
 | DASHR-OTEL-003 | The endpoint is announced where it is needed: the session record, the text view, `OTEL_EXPORTER_OTLP_ENDPOINT` in the chat pane, the agent's opening prompt, the `session_info` tool and a welcome dashboard (endpoint, all logs, recent traces). | Must | Verified | `otel_welcome_validates_against_the_otel_datasources`; AC-OTEL text-view and chat-pane checks in `scripts/e2e/run.sh` |
 | DASHR-OTEL-004 | `dashr tail [--service] -- <command>` (or stdin) ships every stdout and stderr line to the session as OTLP logs with `service.name`, the stream and a severity guessed from the line, colour escapes removed. Output reaches the terminal unchanged, the command's exit code passes through, and a shipping failure is reported once, never failing the command. | Must | Verified | `pump_echoes_everything_and_ships_clean_non_empty_lines`, `tail_passes_the_exit_code_through`, `unreachable_endpoint_drops_lines_without_failing`, `payload_is_otlp_json_with_service_and_stream`, `lines_are_cleaned_of_terminal_escapes`; AC-LOGX exit-code check |
 | DASHR-OTEL-005 | Traces and metrics sent to the endpoint are queryable from the agent's tools through Tempo and Prometheus, masked like any other datasource. | Should | Verified | AC-OTEL traces-and-metrics scenario in `scripts/e2e/run.sh` |
@@ -302,6 +304,15 @@ Crates:
 | DASHR-LOGX-003 | Counting starts when the expectations are armed, and the browser pane moves to that time range (DEC-031). | Must | Verified | `rfc3339_formats_utc`, `count_query_is_case_insensitive_and_zero_filled`; browser scenario ("moved the browser to the armed time range") and AC-LOGX in `scripts/e2e/run.sh` |
 | DASHR-LOGX-004 | The pane notifies the human as each expected message arrives, marks itself blocked with the expectation's name when a forbidden one does, and returns to idle when the expectations are cleared. | Must | Verified | `watches_notify_for_expected_and_alert_for_forbidden`, `an_info_watch_notifies_without_blocking`; AC-LOGX in `scripts/e2e/run.sh` |
 | DASHR-LOGX-005 | The verdict (`log_expectations`, `dashr expect --check` and its exit status) carries counts and waiting/seen/clear/violated per expectation, never a line. | Must | Verified | `outcomes`; AC-LOGX "counts only" check in `scripts/e2e/run.sh` |
+
+### 8.15 Saved dashboards (LIB)
+
+| ID | Requirement | Priority | Status | Evidence |
+|---|---|---|---|---|
+| DASHR-LIB-001 | The current dashboard can be saved on this machine under a name the human chooses (`save_dashboard`, `dashr dashboards save`), in the plugin state directory, outliving every session. Names are 1-60 characters of letters, digits, spaces, `-`, `_`, `.`; one dashboard per name, case-insensitive; an existing name is replaced only when asked. | Must | Verified | `names_are_checked_and_case_insensitive`, `save_list_load_delete`; AC-LIB in `scripts/e2e/run.sh` |
+| DASHR-LIB-002 | What is saved is the dashboard definition only — panels, queries, layout, time range — never a data value. The session-pinned uid, id and version and the log-expectation section (with its armed time range) are left out. | Must | Verified | `saving_drops_what_belongs_to_the_session`; AC-LIB |
+| DASHR-LIB-003 | A saved dashboard loads into any later session (`load_dashboard`, `dashr dashboards load`, `dashr session start --load`), replacing the current one and reloading the browser pane; expectations armed on the replaced dashboard are dropped. A dashboard using a datasource the session lacks is refused, naming it, and nothing changes. | Must | Verified | `save_list_load_delete` (missing datasources); AC-LIB load across panes and refusal in an OpenTelemetry pane in `scripts/e2e/run.sh` |
+| DASHR-LIB-004 | Saved dashboards can be listed (with whether each can load in this session) and deleted, and the agent's opening prompt names them so the human can ask for one by name. | Should | Verified | `opening_prompt_names_saved_dashboards`; AC-LIB `list_saved_dashboards` and `dashr dashboards list` checks |
 
 ## 9. Security requirements
 
@@ -377,6 +388,8 @@ Crates:
 | DEC-032 | Expectations become watches: expected messages are `info` (notify, never block), forbidden ones `alert`. Arming and clearing leave breach state to the monitor, as `remove_watch` does (DEC-022), so a cleared forbidden message returns the pane to idle. A panel with no data keeps its watch's state: a transient failed query had made a seen message clear and notify again. |
 | DEC-033 | The storage constraint is relaxed for OpenTelemetry mode only; the one-container constraint is not. Telemetry lives in anonymous Docker volumes on `/data` and `/var/tempo`, which `--rm` deletes with the container, so a long test session no longer fills the memory limit with logs and traces. dashr mounts its own Tempo configuration (the image's plus `query_frontend.query_end_cutoff: 1s` and a faster live store): Tempo's default cuts the last 30 s from every query, which made a trace searchable only after about 30 s; now about 2 s. The target, agreed with the product owner, is 5 s. |
 | DEC-034 | Grafana silently ignores a dashboard `refresh` that is not in its `timepicker.refresh_intervals`, whose default starts at 5s: the OpenTelemetry sessions' 2s refresh left the dashboard static until reloaded (the plain sessions' 5s was unaffected). Found while taking screenshots of a running session, not by the e2e suite, whose lines arrived before the page loaded. dashr now adds the pinned interval to the list, the e2e suite ships a line after the page has loaded and waits for it to appear, and CI keeps screenshots of the browser pane (`e2e-screens` artifact). |
+| DEC-035 | Saved dashboards are JSON files in the plugin state directory (`dashboards/<name>.json`), not in Grafana: every session's Grafana is disposable, and a file per dashboard is easy to inspect, back up or delete. File names are the lowercased, sanitised name, so names differing only in case are one dashboard on every file system. Each file records the datasource uids its panels use, so a load can refuse up front instead of applying a dashboard whose panels would all fail. |
+| DEC-036 | Configured datasources that reuse a uid of the OpenTelemetry image are left out of provisioning, with a warning, when OpenTelemetry mode is switched on at run time. The configuration check only runs when `[otel] enabled` is in the file, so the action and `--otel` let two datasources share a uid, and which one Grafana kept depended on file order (found while writing the saved-dashboards scenario, whose configuration has a `Loki` datasource). |
 
 ## 13. Open questions and risks
 
@@ -408,6 +421,7 @@ Crates:
 | 2026-09-26 | Publish to npm takes its packaging tools from the workflow commit and the version from the released commit, so tags cut before the tools (v0.2.0) can be published; the first dry run had checked out the tag and found no packaging script. `setup-node` moved off the deprecated Node 20 runtime. | none (fix to TECH-005 pipeline) |
 | 2026-09-26 | v0.3.0: OpenTelemetry mode — one `grafana/otel-lgtm` container per pane with an OTLP endpoint, announced to the human and the agent — plus `dashr tail`, and live log checks: expectation tiles and a highlighted live log trail on top of the dashboard, notifications as messages arrive, a counts-only verdict (`expect_logs`, `log_expectations`, `clear_log_expectations`, `session_info`, `dashr expect`). Watches gain a severity and hold their state through a panel with no data. Skill reference for OTel data and log checks. OpenTelemetry telemetry kept on disk in anonymous volumes deleted with the container, and traces searchable in about 2 s instead of 30 s (DEC-033). | OTEL-001..006, LOGX-001..005, ALERT-005, SKILL-005, GRAF-002, SEC-004 |
 | 2026-09-26 | Fixed the OpenTelemetry dashboard not refreshing by itself (DEC-034); the e2e suite now checks self-refresh and uploads screenshots of the browser pane. | VIEW-001 |
+| 2026-09-26 | Saved dashboards: name the current dashboard and reload it in a later pane (`save_dashboard`, `list_saved_dashboards`, `load_dashboard`, `delete_saved_dashboard`, `dashr dashboards`, `dashr session start --load`); the agent is told which are saved. Fixed a datasource uid clash when OpenTelemetry mode is switched on at run time (DEC-036). | LIB-001..004, OTEL-002 |
 
 ### Requirement completion summary
 
@@ -426,9 +440,10 @@ Crates:
 | SKILL | 5 | 5 | 0 | 0 |
 | OTEL | 6 | 6 | 0 | 0 |
 | LOGX | 5 | 5 | 0 | 0 |
+| LIB | 4 | 4 | 0 | 0 |
 | GOV/TECH | 8 | 7 | 1 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 93 | 92 | 1 | 0 |
+| **All** | 97 | 96 | 1 | 0 |
 
 ## 15. Acceptance criteria
 
@@ -448,3 +463,6 @@ Crates:
   `dashr tail` turn expected ones seen and the verdict passed; a forbidden
   line turns its tile red, fails the verdict and blocks the pane; the verdict
   never carries a line; clearing restores the dashboard and unblocks the pane.
+- **AC-LIB** A dashboard saved by name in one pane loads into a later pane;
+  an existing name is not replaced without asking; a dashboard needing a
+  datasource the session lacks is refused, naming it, and nothing changes.
