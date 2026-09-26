@@ -1,0 +1,5 @@
+# Pinned exactly (decision DEC-006): development, CI and release builds use one
+# compiler, and bumping it is a deliberate, reviewable change.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]

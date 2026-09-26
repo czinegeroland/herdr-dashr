@@ -1,0 +1,34 @@
+name: PRD traceability
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-prd:
+    name: PRD traceability
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Fetch untrusted pull request objects
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "pull/$env:PR_NUMBER/head"
+
+      - name: Validate living PRD
+        shell: pwsh
+        run: >
+          .github/scripts/check-prd-traceability.ps1
+          -BaseSha '${{ github.event.pull_request.base.sha }}'
+          -HeadSha '${{ github.event.pull_request.head.sha }}'
+          -EventPath '${{ github.event_path }}'
