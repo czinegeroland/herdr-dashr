@@ -10,8 +10,8 @@
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Draft |
 | PRD version | 0.1.0 |
-| Delivery phase | M3 - Releases |
-| Last updated | 2026-09-26T03:00:00Z |
+| Delivery phase | v0.1.0 released |
+| Last updated | 2026-09-26T03:20:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -151,7 +151,7 @@ Crates:
 | DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Verified | AC-PIPELINE in `scripts/e2e/run.sh`; `link_pattern_matches_both_consoles` |
 | DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Verified | Startup reaper scenario in `scripts/e2e/run.sh` |
 | DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
-| DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step downloads a checksum-verified release binary, falling back to `cargo` only when no release exists. | Must | Implemented | `scripts/install.sh`; release artifacts pending (DASHR-TECH-004) |
+| DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step downloads a checksum-verified release binary, falling back to `cargo` only when no release exists. | Must | Verified | `herdr plugin install czinegeroland/herdr-dashr` with no cargo on PATH installed `bin/dashr` 0.1.0 via `scripts/install.sh` (release v0.1.0) |
 | DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
 | DASHR-HERDR-008 | The plugin declares and supports Linux and macOS. | Must | Implemented | Manifest `platforms`; CI matrix in `.github/workflows/build-and-test.yml`. |
 | DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
@@ -262,7 +262,7 @@ Crates:
 | DASHR-TECH-001 | Rust workspace, edition 2024, pinned toolchain, `unsafe_code` forbidden, clippy denied. | Must | Verified | `Cargo.toml`, `rust-toolchain.toml`. |
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
-| DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Implemented | `.github/workflows/release.yml`; manual dispatch from `main` creates the tag (DEC-023); verified on the first release |
+| DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Verified | Release v0.1.0 by `.github/workflows/release.yml`: 4 targets, each with a `.sha256` |
 
 ## 9. Security requirements
 
@@ -343,12 +343,13 @@ Crates:
 | 2026-09-26 | M3: release workflow publishing checksummed Linux/macOS archives for `scripts/install.sh`; dependency majors with the Grafana client ported to ureq 3. | TECH-004 |
 | 2026-09-26 | End-to-end suite extended: promote against a second real Grafana, watch removal back to idle, `get_dashboard`, `open_for_pipeline`, exported AWS credentials in the container, doctor, custom image with Infinity. Fixed `remove_watch` leaving the pane blocked (DEC-022). | HERDR-009, GRAF-007, DS-004, MCP-006..008, ALERT-004, PROMO-001..003 |
 | 2026-09-26 | Release workflow can create its own tag from a manual run; Intel macOS build on `macos-15-intel`; evidence recorded for governance, AWS, alert and skill rows; terminal-browser limitation recorded (OQ-007). | TECH-004, CHAT-002, AWS-005/006, ALERT-003, GOV-001..003, TECH-002, SEC-005/007, VIEW-001/002/004 |
+| 2026-09-26 | v0.1.0 released (4 targets, checksummed). Verified a GitHub install with no Rust toolchain. Only the terminal-browser rows remain `Implemented`, pending a manual check in a kitty-graphics terminal (OQ-007). | HERDR-006, TECH-004 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 9 | 7 | 2 | 0 |
+| HERDR | 9 | 8 | 1 | 0 |
 | GRAF | 8 | 8 | 0 | 0 |
 | DS | 6 | 6 | 0 | 0 |
 | VIEW | 4 | 1 | 3 | 0 |
@@ -358,9 +359,9 @@ Crates:
 | AWS | 6 | 6 | 0 | 0 |
 | ALERT | 4 | 4 | 0 | 0 |
 | PROMO | 3 | 3 | 0 | 0 |
-| GOV/TECH | 7 | 6 | 1 | 0 |
+| GOV/TECH | 7 | 7 | 0 | 0 |
 | SEC | 8 | 7 | 1 | 0 |
-| **All** | 75 | 68 | 7 | 0 |
+| **All** | 75 | 70 | 5 | 0 |
 
 ## 15. Acceptance criteria
 
