@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | M3 - Releases |
-| Last updated | 2026-09-26T02:00:00Z |
+| Last updated | 2026-09-26T02:30:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -154,7 +154,7 @@ Crates:
 | DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step downloads a checksum-verified release binary, falling back to `cargo` only when no release exists. | Must | Implemented | `scripts/install.sh`; release artifacts pending (DASHR-TECH-004) |
 | DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
 | DASHR-HERDR-008 | The plugin declares and supports Linux and macOS. | Must | Implemented | Manifest `platforms`; CI matrix in `.github/workflows/build-and-test.yml`. |
-| DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Implemented | `crates/dashr-cli/src/doctor.rs` |
+| DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
 
 ### 8.2 Grafana lifecycle (GRAF)
 
@@ -166,7 +166,7 @@ Crates:
 | DASHR-GRAF-004 | Runtime files live in a 0700 directory on a memory-backed file system where one exists, and are deleted on stop. | Must | Verified | AC-CLOSE in `scripts/e2e/run.sh` |
 | DASHR-GRAF-005 | Start waits for `/api/health` with a bounded timeout and cleans up on failure; a missing Docker is a clear error. | Must | Verified | `start_fails_cleanly_without_docker`, `unreachable_and_timeout` |
 | DASHR-GRAF-006 | The pane stops its container on normal exit and on SIGINT, SIGTERM and SIGHUP (Herdr sends SIGHUP on pane close). | Must | Verified | AC-CLOSE (pane close sends SIGHUP) in `scripts/e2e/run.sh` |
-| DASHR-GRAF-007 | The image is pinned (`grafana/grafana:12.1.1`); `dashr image build` produces a custom image with Infinity and Zabbix plugins installed outside the tmpfs path. | Must | Implemented | `dashr image build`; `dockerfile_keeps_plugins_out_of_the_tmpfs` |
+| DASHR-GRAF-007 | The image is pinned (`grafana/grafana:12.1.1`); `dashr image build` produces a custom image with Infinity and Zabbix plugins installed outside the tmpfs path. | Must | Verified | Custom-image scenario in `scripts/e2e/run.sh` (Infinity loaded from outside the tmpfs) |
 | DASHR-GRAF-008 | A session record (ids, port, uid, datasource policies) is written to the plugin state directory, holds no secret or data value, and is removed on stop. | Must | Verified | `session::tests::records_hold_no_secret_shaped_fields`, `round_trips_lists_and_removes`. |
 
 ### 8.3 Datasources (DS)
@@ -176,7 +176,7 @@ Crates:
 | DASHR-DS-001 | A TestData datasource is always provisioned and flagged non-personal. | Must | Verified | `provisioning::tests::default_config_provisions_only_testdata`. |
 | DASHR-DS-002 | Prometheus, Loki, Tempo, CloudWatch, SQL Server, Azure Monitor, Zabbix and Seq (via Infinity) are provisioned from `dashr.toml`. | Must | Verified | `provisioning::tests::every_kind_maps_to_its_plugin`. |
 | DASHR-DS-003 | Secrets are `$__env{NAME}` references in provisioning and reach the container as `-e NAME`; values never appear in files or argv, and configuration rejects values in place of names. | Must | Verified | `secrets_are_env_references_never_values`, `secrets_are_passed_by_name_only`, `secret_env_must_be_a_name_not_a_value`. |
-| DASHR-DS-004 | CloudWatch receives short-lived credentials exported by `aws configure export-credentials`, falling back to credentials already in the environment. | Must | Implemented | `session::resolve_secrets`, `credentials_keep_only_known_variables`. |
+| DASHR-DS-004 | CloudWatch receives short-lived credentials exported by `aws configure export-credentials`, falling back to credentials already in the environment. | Must | Verified | AC-PIPELINE asserts exported credentials in the container env (`scripts/e2e/run.sh`) |
 | DASHR-DS-005 | Every datasource carries a `personal` flag, defaulting to true. | Must | Verified | `config::tests::example_configuration_parses`. |
 | DASHR-DS-006 | Loopback datasource URLs are rewritten to `host.docker.internal`, with a host-gateway mapping on Linux. | Must | Verified | `loopback_urls_are_rewritten_and_others_kept`, `run_args_store_nothing_and_bind_loopback`. |
 
@@ -206,9 +206,9 @@ Crates:
 | DASHR-MCP-003 | `apply_dashboard` validates structure and datasource references, pins uid/refresh/tag, saves and reloads. | Must | Verified | AC-MASK (valid and invalid dashboards) in `scripts/e2e/run.sh` |
 | DASHR-MCP-004 | `panel_status` reports per-panel state, rows, fields and masked errors, never values. | Must | Verified | AC-MASK in `scripts/e2e/run.sh` |
 | DASHR-MCP-005 | `panel_data_sample` and `probe_query` return masked rows with real field names and types, capped by `masking.max_rows`. | Must | Verified | AC-MASK in `scripts/e2e/run.sh` |
-| DASHR-MCP-006 | `get_dashboard` returns the current dashboard JSON. | Should | Implemented | `DashrTools::get_dashboard`. |
-| DASHR-MCP-007 | `open_for_pipeline` bootstraps from a CodePipeline URL, or opens a new dashboard tab when the region lacks CloudWatch. | Should | Implemented | `DashrTools::open_for_pipeline`. |
-| DASHR-MCP-008 | `promote` copies the dashboard to a configured persistent Grafana. | Should | Implemented | `promote::promote`. |
+| DASHR-MCP-006 | `get_dashboard` returns the current dashboard JSON. | Should | Verified | Promote scenario in `scripts/e2e/run.sh` |
+| DASHR-MCP-007 | `open_for_pipeline` bootstraps from a CodePipeline URL, or opens a new dashboard tab when the region lacks CloudWatch. | Should | Verified | AC-PIPELINE `open_for_pipeline` step in `scripts/e2e/run.sh` |
+| DASHR-MCP-008 | `promote` copies the dashboard to a configured persistent Grafana. | Should | Verified | Promote scenario in `scripts/e2e/run.sh` |
 | DASHR-MCP-009 | `watch_panel`, `list_watches` and `remove_watch` manage local alert rules. | Should | Verified | AC-ALERT in `scripts/e2e/run.sh`; `watches_are_managed_through_the_store` |
 | DASHR-MCP-010 | `screenshot` is refused unless every datasource the dashboard uses is non-personal. | Must | Verified | AC-MASK; `screenshots_only_for_non_personal_dashboards` |
 
@@ -242,15 +242,15 @@ Crates:
 | DASHR-ALERT-001 | Watch rules are evaluated by the dashboard pane against real values; values never leave the pane. | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
 | DASHR-ALERT-002 | A new breach marks the dashboard pane blocked with the rule wording (no values). | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
 | DASHR-ALERT-003 | A new breach raises one Herdr notification when `monitor.notify` is on. | Should | Implemented | Same test. |
-| DASHR-ALERT-004 | When every breach clears, the pane returns to idle. | Should | Implemented | `clearing_the_last_breach_returns_to_idle`. |
+| DASHR-ALERT-004 | When every breach clears, the pane returns to idle. | Should | Verified | Watch-removal scenario in `scripts/e2e/run.sh`; `clearing_the_last_breach_returns_to_idle` |
 
 ### 8.10 Promote (PROMO)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-PROMO-001 | Promotion saves into a folder (created when missing) without overwriting. | Should | Implemented | `promote::promote`, `token_goes_in_a_header_and_never_in_debug_output`. |
-| DASHR-PROMO-002 | Datasources are remapped by name; missing ones are listed and nothing is saved. | Should | Implemented | `remaps_every_reference_and_leaves_others`. |
-| DASHR-PROMO-003 | The token comes from the environment variable named in configuration, travels only in a header and never appears in debug output. | Must | Verified | `token_goes_in_a_header_and_never_in_debug_output`, `unconfigured_or_tokenless_promotion_is_refused_before_any_request`. |
+| DASHR-PROMO-001 | Promotion saves into a folder (created when missing) without overwriting. | Should | Verified | Promote scenario against a second real Grafana in `scripts/e2e/run.sh` |
+| DASHR-PROMO-002 | Datasources are remapped by name; missing ones are listed and nothing is saved. | Should | Verified | Promote scenario (missing Loki refused; TestData uid remapped) in `scripts/e2e/run.sh` |
+| DASHR-PROMO-003 | The token comes from the environment variable named in configuration, travels only in a header and never appears in debug output. | Must | Verified | `token_goes_in_a_header_and_never_in_debug_output`; promote scenario asserts the token never appears in tool output |
 
 ### 8.11 Governance and implementation (GOV, TECH)
 
@@ -319,6 +319,7 @@ Crates:
 | DEC-019 | The default agent argv puts the prompt before `--mcp-config`, whose Claude Code parser takes several values and swallowed the prompt. |
 | DEC-020 | `masking.testdata_personal` lets the end-to-end suite run full masking through a real Grafana using TestData CSV. |
 | DEC-021 | Dependency majors (ureq 3, toml 1, signal-hook 0.4, base64 0.23, actions/checkout 7) are taken together in one reviewed PR with code changes, superseding the Dependabot PRs that could not compile on their own. |
+| DEC-022 | `remove_watch` leaves breach state to the pane's monitor, which reports the rule as cleared and returns the pane to idle. Clearing it in the tool hid the transition and left the pane blocked (found by the end-to-end suite). |
 
 ## 13. Open questions and risks
 
@@ -338,24 +339,25 @@ Crates:
 | 2026-09-26 | M0/M1: PRD, CI, governance; library crates `dashr-core`, `dashr-grafana`, `dashr-docker`, `dashr-herdr`, `dashr-aws`, `dashr-runtime`, `dashr-mcp` with unit tests. | GOV-001..003, TECH-001..002, GRAF-*, DS-*, PRIV-*, AWS-*, MCP-*, ALERT-*, PROMO-*, SEC-* |
 | 2026-09-26 | M2: `dashr` binary (Herdr actions, dashboard pane, chat pane, hooks, standalone commands, doctor), generated `herdr-plugin.toml`, `scripts/install.sh`, agent skill, end-to-end suite in CI; fixed a masking gap on non-personal datasources (DEC-017). | HERDR-001..007/009, GRAF-001..007, VIEW-001/003, CHAT-001..003, MCP-002..005/009/010, PRIV-005, AWS-004, ALERT-001/002, TECH-003, SEC-001/004 |
 | 2026-09-26 | M3: release workflow publishing checksummed Linux/macOS archives for `scripts/install.sh`; dependency majors with the Grafana client ported to ureq 3. | TECH-004 |
+| 2026-09-26 | End-to-end suite extended: promote against a second real Grafana, watch removal back to idle, `get_dashboard`, `open_for_pipeline`, exported AWS credentials in the container, doctor, custom image with Infinity. Fixed `remove_watch` leaving the pane blocked (DEC-022). | HERDR-009, GRAF-007, DS-004, MCP-006..008, ALERT-004, PROMO-001..003 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 9 | 6 | 3 | 0 |
-| GRAF | 8 | 7 | 1 | 0 |
-| DS | 6 | 5 | 1 | 0 |
+| HERDR | 9 | 7 | 2 | 0 |
+| GRAF | 8 | 8 | 0 | 0 |
+| DS | 6 | 6 | 0 | 0 |
 | VIEW | 4 | 1 | 3 | 0 |
 | CHAT | 3 | 2 | 1 | 0 |
-| MCP | 10 | 7 | 3 | 0 |
+| MCP | 10 | 10 | 0 | 0 |
 | PRIV | 7 | 7 | 0 | 0 |
 | AWS | 6 | 4 | 2 | 0 |
-| ALERT | 4 | 2 | 2 | 0 |
-| PROMO | 3 | 1 | 2 | 0 |
+| ALERT | 4 | 3 | 1 | 0 |
+| PROMO | 3 | 3 | 0 | 0 |
 | GOV/TECH | 7 | 2 | 5 | 0 |
 | SEC | 8 | 6 | 2 | 0 |
-| **All** | 75 | 50 | 25 | 0 |
+| **All** | 75 | 59 | 16 | 0 |
 
 ## 15. Acceptance criteria
 

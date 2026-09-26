@@ -384,7 +384,9 @@ impl DashrTools {
         let mut state = self.store.load_watches(&self.session_id);
         let before = state.rules.len();
         state.rules.retain(|rule| rule.id != id);
-        state.breached.retain(|breached| breached != id);
+        // Breach state is left to the pane's monitor: it sees the rule gone,
+        // reports it cleared, and returns the pane to idle. Clearing it here
+        // hid that transition and left the pane blocked.
         if state.rules.len() == before {
             return ToolOutput::Error(format!("no watch {id}"));
         }
@@ -722,6 +724,11 @@ mod tests {
             ToolOutput::Json(_)
         ));
         let state = store.load_watches("s");
-        assert!(state.rules.is_empty() && state.breached.is_empty());
+        assert!(state.rules.is_empty());
+        assert_eq!(
+            state.breached,
+            vec!["w1"],
+            "the monitor clears breach state"
+        );
     }
 }
