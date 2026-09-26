@@ -4,7 +4,6 @@
 //! rest of what the tools return is schema (field names and types), counts,
 //! errors (masked too), and the dashboard JSON the agent itself wrote.
 
-use base64::Engine;
 use dashr_aws::cli::AwsCli;
 use dashr_core::config::Config;
 use dashr_core::dashboard;
@@ -413,19 +412,13 @@ impl DashrTools {
         let Some(browser) = &self.browser else {
             return ToolOutput::Error("the browser pane is disabled in configuration".into());
         };
-        let path = record.runtime_dir.join("screenshot.png");
         let fragment = format!("127.0.0.1:{}/d/{}", record.port, record.dashboard_uid);
-        if let Err(error) = browser.screenshot(&fragment, &path) {
-            return ToolOutput::Error(error.to_string());
-        }
-        let bytes = std::fs::read(&path);
-        let _ = std::fs::remove_file(&path);
-        match bytes {
-            Ok(bytes) => ToolOutput::Image {
-                data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        match browser.screenshot(&fragment) {
+            Ok(data) => ToolOutput::Image {
+                data,
                 mime_type: "image/png".into(),
             },
-            Err(error) => ToolOutput::Error(format!("screenshot not readable: {error}")),
+            Err(error) => ToolOutput::Error(error.to_string()),
         }
     }
 

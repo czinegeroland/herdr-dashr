@@ -10,8 +10,8 @@
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Draft |
 | PRD version | 0.1.0 |
-| Delivery phase | v0.1.0 released |
-| Last updated | 2026-09-26T03:20:00Z |
+| Delivery phase | v0.1.x - browser pane verified |
+| Last updated | 2026-09-26T04:45:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -153,7 +153,7 @@ Crates:
 | DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
 | DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step downloads a checksum-verified release binary, falling back to `cargo` only when no release exists. | Must | Verified | `herdr plugin install czinegeroland/herdr-dashr` with no cargo on PATH installed `bin/dashr` 0.1.0 via `scripts/install.sh` (release v0.1.0) |
 | DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
-| DASHR-HERDR-008 | The plugin declares and supports Linux and macOS. | Must | Implemented | Manifest `platforms`; CI matrix in `.github/workflows/build-and-test.yml`. |
+| DASHR-HERDR-008 | The plugin declares and supports Linux and macOS. | Must | Verified | Manifest `platforms`; tests on both in `.github/workflows/build-and-test.yml`; v0.1.0 binaries for x86_64/aarch64 Linux and macOS; e2e on Linux |
 | DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
 
 ### 8.2 Grafana lifecycle (GRAF)
@@ -163,7 +163,7 @@ Crates:
 | DASHR-GRAF-001 | One container per pane, named `herdr-grafana-<session>`, labelled with owner, pane, socket hash and session, bound to a random loopback port. | Must | Verified | AC-OPEN `docker inspect` assertions in `scripts/e2e/run.sh` |
 | DASHR-GRAF-002 | The container stores nothing: `--read-only`, tmpfs for `/var/lib/grafana`, `/tmp`, `/var/log/grafana`, `--log-driver none`, `--memory-swap` equal to `--memory`, all capabilities dropped. | Must | Verified | AC-OPEN `docker inspect` assertions in `scripts/e2e/run.sh` |
 | DASHR-GRAF-003 | Anonymous admin, login form disabled, analytics, update checks and news disabled. | Must | Verified | `RunSpec::grafana_env`; AC-OPEN (anonymous API access) |
-| DASHR-GRAF-004 | Runtime files live in a 0700 directory on a memory-backed file system where one exists, and are deleted on stop. | Must | Verified | AC-CLOSE in `scripts/e2e/run.sh` |
+| DASHR-GRAF-004 | Runtime files live in a 0700 directory on a memory-backed file system where one exists, and are deleted on stop. | Must | Verified | AC-CLOSE; browser-pane scenario asserts a memory-backed, per-user runtime dir (DEC-026) |
 | DASHR-GRAF-005 | Start waits for `/api/health` with a bounded timeout and cleans up on failure; a missing Docker is a clear error. | Must | Verified | `start_fails_cleanly_without_docker`, `unreachable_and_timeout` |
 | DASHR-GRAF-006 | The pane stops its container on normal exit and on SIGINT, SIGTERM and SIGHUP (Herdr sends SIGHUP on pane close). | Must | Verified | AC-CLOSE (pane close sends SIGHUP) in `scripts/e2e/run.sh` |
 | DASHR-GRAF-007 | The image is pinned (`grafana/grafana:12.1.1`); `dashr image build` produces a custom image with Infinity and Zabbix plugins installed outside the tmpfs path. | Must | Verified | Custom-image scenario in `scripts/e2e/run.sh` (Infinity loaded from outside the tmpfs) |
@@ -184,10 +184,10 @@ Crates:
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser. | Must | Implemented | `pane::dashboard` spawns `Browser::open_command`; needs a kitty-graphics client (OQ-007) |
-| DASHR-VIEW-002 | The browser profile lives in the session runtime directory via `TERMINAL_BROWSER_APPDATA` and is deleted with it. | Must | Implemented | `open_command_points_the_profile_at_the_runtime_dir`; needs a kitty-graphics client (OQ-007) |
+| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser. | Must | Verified | Browser-pane scenario in `scripts/e2e/run.sh`: the real pane process in `scripts/e2e/kitty_term.py` opens the kiosk URL and Grafana renders |
+| DASHR-VIEW-002 | The browser profile lives in the session runtime directory via `TERMINAL_BROWSER_APPDATA` and is deleted with it. | Must | Verified | Browser-pane scenario in `scripts/e2e/run.sh` asserts the profile under the memory-backed runtime dir and its deletion on close; `open_command_points_the_profile_at_the_runtime_dir` |
 | DASHR-VIEW-003 | Without terminal-browser (or with `browser.enabled = false`) the pane shows a text status view: the URL and per-panel state. | Must | Verified | Text-view assertions in `scripts/e2e/run.sh` |
-| DASHR-VIEW-004 | Applying a dashboard reloads the browser showing this session. | Should | Implemented | `finds_the_browser_showing_the_session`; needs a kitty-graphics client (OQ-007) |
+| DASHR-VIEW-004 | Applying a dashboard reloads the browser showing this session. | Should | Verified | Browser-pane scenario: `apply_dashboard` reports `browser_reloaded` and the page shows the new panel; `cdp_call_skips_events_and_returns_the_result` |
 
 ### 8.5 Chat pane (CHAT)
 
@@ -210,7 +210,7 @@ Crates:
 | DASHR-MCP-007 | `open_for_pipeline` bootstraps from a CodePipeline URL, or opens a new dashboard tab when the region lacks CloudWatch. | Should | Verified | AC-PIPELINE `open_for_pipeline` step in `scripts/e2e/run.sh` |
 | DASHR-MCP-008 | `promote` copies the dashboard to a configured persistent Grafana. | Should | Verified | Promote scenario in `scripts/e2e/run.sh` |
 | DASHR-MCP-009 | `watch_panel`, `list_watches` and `remove_watch` manage local alert rules. | Should | Verified | AC-ALERT in `scripts/e2e/run.sh`; `watches_are_managed_through_the_store` |
-| DASHR-MCP-010 | `screenshot` is refused unless every datasource the dashboard uses is non-personal. | Must | Verified | AC-MASK; `screenshots_only_for_non_personal_dashboards` |
+| DASHR-MCP-010 | `screenshot` is refused unless every datasource the dashboard uses is non-personal. | Must | Verified | `screenshots_only_for_non_personal_dashboards`; AC-MASK (refused) and the browser-pane scenario (PNG returned) |
 
 ### 8.7 Privacy and masking (PRIV)
 
@@ -272,7 +272,7 @@ Crates:
 | DASHR-SEC-002 | Grafana listens on loopback only. | Verified | `run_args_store_nothing_and_bind_loopback`. |
 | DASHR-SEC-003 | No secret is written to a file or passed in argv. | Verified | `secrets_are_passed_by_name_only`, `secrets_are_env_references_never_values`. |
 | DASHR-SEC-004 | The container cannot persist data or escalate: read-only root, tmpfs, no swap, no capabilities, no-new-privileges. | Verified | AC-OPEN `docker inspect` assertions |
-| DASHR-SEC-005 | The browser profile is ephemeral. | Implemented | `open_command_points_the_profile_at_the_runtime_dir`; needs a kitty-graphics client (OQ-007) |
+| DASHR-SEC-005 | The browser profile is ephemeral. | Verified | Browser-pane scenario in `scripts/e2e/run.sh` |
 | DASHR-SEC-006 | Screenshots of dashboards touching personal datasources are refused. | Verified | `screenshots_only_for_non_personal_dashboards`. |
 | DASHR-SEC-007 | Herdr pane state (messages, tokens) carries counts and rule wording only, because Herdr's socket has no caller authentication (#514). | Verified | `a_new_breach_blocks_and_notifies_once`, `grafana_errors_show_in_the_token` (counts and wording only) |
 | DASHR-SEC-008 | The reaper only stops containers labelled with this Herdr server's socket hash. | Verified | `orphans_are_this_servers_containers_without_a_live_pane`, `session_ids_differ_between_servers_for_the_same_pane`. |
@@ -321,6 +321,9 @@ Crates:
 | DEC-021 | Dependency majors (ureq 3, toml 1, signal-hook 0.4, base64 0.23, actions/checkout 7) are taken together in one reviewed PR with code changes, superseding the Dependabot PRs that could not compile on their own. |
 | DEC-022 | `remove_watch` leaves breach state to the pane's monitor, which reports the rule as cleared and returns the pane to idle. Clearing it in the tool hid the transition and left the pane blocked (found by the end-to-end suite). |
 | DEC-023 | Releases can be cut by a manual run of the release workflow from `main`: it releases the manifest version and creates the tag at that commit, for sessions whose git access cannot push tags. |
+| DEC-024 | Reload and screenshot drive terminal-browser's Chromium directly over the DevTools protocol (port from `terminal-browser ls --json`, loopback websocket only). `terminal-browser action` goes through agent-browser, which forgets its CDP attachment after one command and tries to launch its own Chrome (terminal-browser 0.11.1, agent-browser 0.33.0). |
+| DEC-025 | The browser process gets `LANG=en_US.UTF-8` when the environment's locale is missing, C or POSIX: Chromium then reports language `c` and Grafana replaces the dashboard with "An unexpected error happened" (`RangeError: Invalid language tag: c`). Found by the browser-pane scenario. |
+| DEC-026 | Runtime directories under shared bases (`/dev/shm`, `/tmp`) are `herdr-dashr-<user>`: the first user's 0700 `herdr-dashr` locked other users out and pushed them to disk. |
 
 ## 13. Open questions and risks
 
@@ -328,11 +331,11 @@ Crates:
 |---|---|
 | OQ-001 | Kitty-graphics rendering varies by terminal (Herdr #3018 WezTerm, #3941 iTerm2, #3697/#3676). The text view is the fallback. |
 | OQ-002 | macOS has no user tmpfs; runtime files use the private per-user temp directory and are deleted on stop. |
-| OQ-003 | terminal-browser runs a shared daemon; whether `TERMINAL_BROWSER_APPDATA` applies when the daemon is already running is unverified. |
+| OQ-003 | Resolved: `TERMINAL_BROWSER_APPDATA` is honoured and the profile lands in the session runtime dir (browser-pane scenario). |
 | OQ-004 | Anonymous admin on loopback: any local process can reach the Grafana while the pane lives. Accepted for a single-user workstation. |
 | OQ-005 | macOS input helper of terminal-browser may need accessibility permission on managed machines. |
 | OQ-006 | CloudWatch Live Tail and Loki tail are not Grafana-native streams; panels refresh on an interval instead. |
-| OQ-007 | terminal-browser cannot be exercised in CI or a headless Herdr: it refuses to run as root and needs a terminal that answers the kitty graphics query, which a headless Herdr pane without an attached client does not. The pane falls back to the text view in that case (verified). Browser rows stay `Implemented` until checked by hand in Ghostty or kitty. |
+| OQ-007 | Resolved: terminal-browser refuses root and needs a kitty-graphics terminal; CI runs it as the non-root runner inside `scripts/e2e/kitty_term.py`, which answers the graphics probe and counts frames. Real terminals (Ghostty, kitty, WezTerm, iTerm2) remain subject to OQ-001. |
 
 ## 14. Delivery ledger
 
@@ -344,15 +347,16 @@ Crates:
 | 2026-09-26 | End-to-end suite extended: promote against a second real Grafana, watch removal back to idle, `get_dashboard`, `open_for_pipeline`, exported AWS credentials in the container, doctor, custom image with Infinity. Fixed `remove_watch` leaving the pane blocked (DEC-022). | HERDR-009, GRAF-007, DS-004, MCP-006..008, ALERT-004, PROMO-001..003 |
 | 2026-09-26 | Release workflow can create its own tag from a manual run; Intel macOS build on `macos-15-intel`; evidence recorded for governance, AWS, alert and skill rows; terminal-browser limitation recorded (OQ-007). | TECH-004, CHAT-002, AWS-005/006, ALERT-003, GOV-001..003, TECH-002, SEC-005/007, VIEW-001/002/004 |
 | 2026-09-26 | v0.1.0 released (4 targets, checksummed). Verified a GitHub install with no Rust toolchain. Only the terminal-browser rows remain `Implemented`, pending a manual check in a kitty-graphics terminal (OQ-007). | HERDR-006, TECH-004 |
+| 2026-09-26 | Browser pane verified end to end: a pty that answers kitty graphics queries lets CI run terminal-browser against the real Grafana. Reload and screenshot moved to direct CDP (DEC-024); fixed the Grafana crash under the C locale (DEC-025) and per-user runtime dirs (DEC-026). | VIEW-001/002/004, MCP-010, GRAF-004, SEC-005 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 9 | 8 | 1 | 0 |
+| HERDR | 9 | 9 | 0 | 0 |
 | GRAF | 8 | 8 | 0 | 0 |
 | DS | 6 | 6 | 0 | 0 |
-| VIEW | 4 | 1 | 3 | 0 |
+| VIEW | 4 | 4 | 0 | 0 |
 | CHAT | 3 | 3 | 0 | 0 |
 | MCP | 10 | 10 | 0 | 0 |
 | PRIV | 7 | 7 | 0 | 0 |
@@ -360,8 +364,8 @@ Crates:
 | ALERT | 4 | 4 | 0 | 0 |
 | PROMO | 3 | 3 | 0 | 0 |
 | GOV/TECH | 7 | 7 | 0 | 0 |
-| SEC | 8 | 7 | 1 | 0 |
-| **All** | 75 | 70 | 5 | 0 |
+| SEC | 8 | 8 | 0 | 0 |
+| **All** | 75 | 75 | 0 | 0 |
 
 ## 15. Acceptance criteria
 
