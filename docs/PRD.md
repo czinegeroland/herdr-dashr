@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.3.0 |
 | Delivery phase | v0.3.0 - OpenTelemetry and live log checks |
-| Last updated | 2026-09-26T14:55:00Z |
+| Last updated | 2026-09-26T15:20:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -190,7 +190,7 @@ Crates:
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser. | Must | Verified | Browser-pane scenario in `scripts/e2e/run.sh`: the real pane process in `scripts/e2e/kitty_term.py` opens the kiosk URL and Grafana renders |
+| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser, and the page refreshes by itself at that interval (DEC-034). | Must | Verified | Browser-pane scenario in `scripts/e2e/run.sh`: the real pane process in `scripts/e2e/kitty_term.py` opens the kiosk URL and Grafana renders; a line shipped after the page loaded appears without a reload; `the_pinned_refresh_is_always_an_allowed_interval` |
 | DASHR-VIEW-002 | The browser profile lives in the session runtime directory via `TERMINAL_BROWSER_APPDATA` and is deleted with it. | Must | Verified | Browser-pane scenario in `scripts/e2e/run.sh` asserts the profile under the memory-backed runtime dir and its deletion on close; `open_command_points_the_profile_at_the_runtime_dir` |
 | DASHR-VIEW-003 | Without terminal-browser (or with `browser.enabled = false`) the pane shows a text status view: the URL and per-panel state. | Must | Verified | Text-view assertions in `scripts/e2e/run.sh` |
 | DASHR-VIEW-004 | Applying a dashboard reloads the browser showing this session. | Should | Verified | Browser-pane scenario: `apply_dashboard` reports `browser_reloaded` and the page shows the new panel; `cdp_call_skips_events_and_returns_the_result` |
@@ -376,6 +376,7 @@ Crates:
 | DEC-031 | Expectations are matched twice: by Loki (RE2 with `(?i)`) for the counts and by a Grafana table value mapping (a JavaScript regex, no inline flags) for the highlight, so patterns are limited to the common subset and case-folded as `[xX]` for the browser. The tiles use `count_over_time(... [$__range]) or vector(0)`; because Grafana renders `$__range` in whole seconds, a window starting exactly at arming dropped lines logged in its first second on alternate refreshes (found by AC-LOGX), so the window starts one second before arming. The time is written as RFC 3339: Grafana's time picker shows an epoch-millisecond string as "Invalid date". |
 | DEC-032 | Expectations become watches: expected messages are `info` (notify, never block), forbidden ones `alert`. Arming and clearing leave breach state to the monitor, as `remove_watch` does (DEC-022), so a cleared forbidden message returns the pane to idle. A panel with no data keeps its watch's state: a transient failed query had made a seen message clear and notify again. |
 | DEC-033 | The storage constraint is relaxed for OpenTelemetry mode only; the one-container constraint is not. Telemetry lives in anonymous Docker volumes on `/data` and `/var/tempo`, which `--rm` deletes with the container, so a long test session no longer fills the memory limit with logs and traces. dashr mounts its own Tempo configuration (the image's plus `query_frontend.query_end_cutoff: 1s` and a faster live store): Tempo's default cuts the last 30 s from every query, which made a trace searchable only after about 30 s; now about 2 s. The target, agreed with the product owner, is 5 s. |
+| DEC-034 | Grafana silently ignores a dashboard `refresh` that is not in its `timepicker.refresh_intervals`, whose default starts at 5s: the OpenTelemetry sessions' 2s refresh left the dashboard static until reloaded (the plain sessions' 5s was unaffected). Found while taking screenshots of a running session, not by the e2e suite, whose lines arrived before the page loaded. dashr now adds the pinned interval to the list, the e2e suite ships a line after the page has loaded and waits for it to appear, and CI keeps screenshots of the browser pane (`e2e-screens` artifact). |
 
 ## 13. Open questions and risks
 
@@ -406,6 +407,7 @@ Crates:
 | 2026-09-26 | npm distribution ported from herdr-remote-channel: `herdr-dashr` and four platform packages, verified packaging, publish workflow after Release; `install.sh` prefers npm and falls back to the GitHub release. | TECH-005, HERDR-006 |
 | 2026-09-26 | Publish to npm takes its packaging tools from the workflow commit and the version from the released commit, so tags cut before the tools (v0.2.0) can be published; the first dry run had checked out the tag and found no packaging script. `setup-node` moved off the deprecated Node 20 runtime. | none (fix to TECH-005 pipeline) |
 | 2026-09-26 | v0.3.0: OpenTelemetry mode — one `grafana/otel-lgtm` container per pane with an OTLP endpoint, announced to the human and the agent — plus `dashr tail`, and live log checks: expectation tiles and a highlighted live log trail on top of the dashboard, notifications as messages arrive, a counts-only verdict (`expect_logs`, `log_expectations`, `clear_log_expectations`, `session_info`, `dashr expect`). Watches gain a severity and hold their state through a panel with no data. Skill reference for OTel data and log checks. OpenTelemetry telemetry kept on disk in anonymous volumes deleted with the container, and traces searchable in about 2 s instead of 30 s (DEC-033). | OTEL-001..006, LOGX-001..005, ALERT-005, SKILL-005, GRAF-002, SEC-004 |
+| 2026-09-26 | Fixed the OpenTelemetry dashboard not refreshing by itself (DEC-034); the e2e suite now checks self-refresh and uploads screenshots of the browser pane. | VIEW-001 |
 
 ### Requirement completion summary
 
