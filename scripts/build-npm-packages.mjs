@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Turns the release archives into npm packages, verifying them on the way.
 //
-//   node scripts/build-npm-packages.mjs --version 0.2.0 \
+//   node scripts/build-npm-packages.mjs --version 0.1.0 \
 //     --artifacts <dir of release archives and .sha256 files> \
 //     --out <dir to write packages into>
 //
