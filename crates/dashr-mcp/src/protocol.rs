@@ -18,10 +18,20 @@ pub enum ToolOutput {
     Error(String),
 }
 
-/// The tools a server exposes.
+/// The tools a server exposes, and optional read-only text resources.
 pub trait Tools {
     fn definitions(&self) -> Vec<Value>;
     fn call(&mut self, name: &str, arguments: &Value) -> ToolOutput;
+
+    /// Resource descriptors (`uri`, `name`, `mimeType`, ...). None by default.
+    fn resources(&self) -> Vec<Value> {
+        Vec::new()
+    }
+
+    /// The text of a resource, with its MIME type.
+    fn read_resource(&self, _uri: &str) -> Option<(String, String)> {
+        None
+    }
 }
 
 pub struct Server<T: Tools> {
@@ -95,11 +105,15 @@ impl<T: Tools> Server<T> {
                 } else {
                     SUPPORTED_VERSIONS[0]
                 };
+                let mut capabilities = json!({"tools": {"listChanged": false}});
+                if !self.tools.resources().is_empty() {
+                    capabilities["resources"] = json!({"listChanged": false, "subscribe": false});
+                }
                 result(
                     &id,
                     json!({
                         "protocolVersion": version,
-                        "capabilities": {"tools": {"listChanged": false}},
+                        "capabilities": capabilities,
                         "serverInfo": {"name": self.name, "version": self.version},
                         "instructions": self.instructions
                     }),
@@ -126,7 +140,20 @@ impl<T: Tools> Server<T> {
                 let output = self.tools.call(name, &arguments);
                 result(&id, Self::tool_result(output))
             }
-            "resources/list" => result(&id, json!({"resources": []})),
+            "resources/list" => result(&id, json!({"resources": self.tools.resources()})),
+            "resources/templates/list" => result(&id, json!({"resourceTemplates": []})),
+            "resources/read" => {
+                let Some(uri) = params.get("uri").and_then(Value::as_str) else {
+                    return Some(error(&id, -32602, "resources/read needs a uri"));
+                };
+                match self.tools.read_resource(uri) {
+                    Some((mime_type, text)) => result(
+                        &id,
+                        json!({"contents": [{"uri": uri, "mimeType": mime_type, "text": text}]}),
+                    ),
+                    None => error(&id, -32002, &format!("resource not found: {uri}")),
+                }
+            }
             "prompts/list" => result(&id, json!({"prompts": []})),
             other => error(&id, -32601, &format!("method not found: {other}")),
         })
@@ -165,6 +192,12 @@ mod tests {
     impl Tools for Echo {
         fn definitions(&self) -> Vec<Value> {
             vec![json!({"name": "echo", "description": "echo", "inputSchema": {"type": "object"}})]
+        }
+        fn resources(&self) -> Vec<Value> {
+            vec![json!({"uri": "echo://guide", "name": "guide", "mimeType": "text/markdown"})]
+        }
+        fn read_resource(&self, uri: &str) -> Option<(String, String)> {
+            (uri == "echo://guide").then(|| ("text/markdown".to_owned(), "# Guide".to_owned()))
         }
         fn call(&mut self, _name: &str, arguments: &Value) -> ToolOutput {
             if arguments.get("fail").is_some() {
@@ -205,6 +238,20 @@ mod tests {
         assert_eq!(answers[2]["result"]["isError"], false);
         assert_eq!(answers[3]["result"]["isError"], true);
         assert_eq!(answers[4]["id"], 5);
+    }
+
+    #[test]
+    fn resources_are_listed_and_read() {
+        let answers = run(&[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"resources/list"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"echo://guide"}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"echo://nope"}}"#,
+        ]);
+        assert!(answers[0]["result"]["capabilities"]["resources"].is_object());
+        assert_eq!(answers[1]["result"]["resources"][0]["uri"], "echo://guide");
+        assert_eq!(answers[2]["result"]["contents"][0]["text"], "# Guide");
+        assert_eq!(answers[3]["error"]["code"], -32002);
     }
 
     #[test]

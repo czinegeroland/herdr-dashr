@@ -12,6 +12,7 @@ pub mod monitor;
 pub mod paths;
 pub mod promote;
 pub mod session;
+pub mod skill;
 pub mod status;
 
 pub use paths::Paths;

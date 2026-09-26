@@ -86,7 +86,7 @@ enum Command {
     },
     /// Check prerequisites.
     Doctor,
-    /// Install the agent skill for Claude Code (~/.claude/skills/herdr-dashr).
+    /// The dashboard-building agent skill (installed into ~/.claude/skills by default).
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
@@ -140,8 +140,30 @@ enum ConfigCommand {
 
 #[derive(Subcommand)]
 enum SkillCommand {
-    Install,
-    Print,
+    /// Install or refresh the skill in the configured skill directories.
+    Install {
+        /// Install into this skills directory instead of the configured ones.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Replace a same-named skill that dashr did not write.
+        #[arg(long)]
+        force: bool,
+        /// Report problems but always exit 0 (used by the plugin build step).
+        #[arg(long)]
+        best_effort: bool,
+    },
+    /// Remove the skill, if dashr installed it.
+    Uninstall {
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Print one of the skill's files (default SKILL.md).
+    Print {
+        #[arg(default_value = "SKILL.md")]
+        file: String,
+    },
+    /// List the skill's files.
+    Files,
 }
 
 /// An error for the user: printed to stderr, exit status 1.
@@ -209,9 +231,30 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Doctor => doctor::run(&paths).map(|_| ()),
         Command::Skill { command } => match command {
-            SkillCommand::Install => standalone::skill_install(),
-            SkillCommand::Print => {
-                print!("{}", standalone::SKILL);
+            SkillCommand::Install {
+                dir,
+                force,
+                best_effort,
+            } => {
+                let result = standalone::skill_install(&paths, dir, force);
+                match (result, best_effort) {
+                    (Err(message), true) => {
+                        eprintln!("dashr: skill not installed: {message}");
+                        Ok(())
+                    }
+                    (result, _) => result,
+                }
+            }
+            SkillCommand::Uninstall { dir } => standalone::skill_uninstall(&paths, dir),
+            SkillCommand::Print { file } => dashr_runtime::skill::FILES
+                .iter()
+                .find(|(name, _)| *name == file)
+                .map(|(_, contents)| print!("{contents}"))
+                .ok_or_else(|| format!("no skill file {file}; see `dashr skill files`")),
+            SkillCommand::Files => {
+                for (name, _) in dashr_runtime::skill::FILES {
+                    println!("{name}");
+                }
                 Ok(())
             }
         },

@@ -102,9 +102,17 @@ fn manifest(version: &'static str) -> Manifest {
         min_herdr_version: MIN_HERDR_VERSION,
         description: "Agent-built, live Grafana dashboards in a Herdr pane, with masking between your data and the agent.",
         platforms: vec!["linux", "macos"],
-        build: vec![Build {
-            command: vec!["sh".into(), "scripts/install.sh".into()],
-        }],
+        build: vec![
+            Build {
+                command: vec!["sh".into(), "scripts/install.sh".into()],
+            },
+            // Installs the dashboard-building skill for Claude Code; never
+            // fails the install and never replaces a skill dashr did not
+            // write (DASHR-SKILL-002).
+            Build {
+                command: dashr(&["skill", "install", "--best-effort"]),
+            },
+        ],
         startup: vec![Hook {
             command: dashr(&["herdr", "startup"]),
         }],

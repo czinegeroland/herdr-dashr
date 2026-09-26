@@ -36,7 +36,12 @@ reading the pane). The screenshot tool refuses dashboards that touch personal da
 Workflow: list_datasources -> probe_query to learn the shape of data -> apply_dashboard \
 (standard Grafana dashboard JSON; uid, refresh and tags are set for you) -> panel_status -> fix. \
 Use watch_panel to alert the human when a panel crosses a threshold; the pane evaluates it locally. \
-promote copies a useful dashboard to the team's persistent Grafana.";
+promote copies a useful dashboard to the team's persistent Grafana.
+
+Follow the herdr-dashr skill for the full loop, panel JSON and query models per datasource. \
+If the skill is not loaded, read the same guide from this server's resources: \
+dashr://guide/SKILL.md, dashr://guide/reference/dashboard-json.md, \
+dashr://guide/reference/datasources.md, dashr://guide/reference/recipes.md.";
 
 fn tool(name: &str, description: &str, schema: Value) -> Value {
     json!({"name": name, "description": description, "inputSchema": schema})
@@ -519,6 +524,26 @@ pub fn screenshot_allowed(record: &SessionRecord, model: &Value) -> Result<(), S
 }
 
 impl Tools for DashrTools {
+    fn resources(&self) -> Vec<Value> {
+        dashr_runtime::skill::FILES
+            .iter()
+            .map(|(path, contents)| {
+                json!({
+                    "uri": dashr_runtime::skill::resource_uri(path),
+                    "name": path,
+                    "title": format!("herdr-dashr guide: {path}"),
+                    "mimeType": "text/markdown",
+                    "size": contents.len(),
+                })
+            })
+            .collect()
+    }
+
+    fn read_resource(&self, uri: &str) -> Option<(String, String)> {
+        dashr_runtime::skill::resource(uri)
+            .map(|text| ("text/markdown".to_owned(), text.to_owned()))
+    }
+
     fn definitions(&self) -> Vec<Value> {
         let empty = json!({"type": "object", "properties": {}, "additionalProperties": false});
         vec![

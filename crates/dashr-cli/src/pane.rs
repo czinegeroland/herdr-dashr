@@ -257,6 +257,22 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
     }
     let mut record = started.record.clone();
 
+    // Keep the dashboard-building skill current before the agent starts
+    // (DASHR-SKILL-002). Best effort: a failure is reported, not fatal.
+    if config.agent.enabled && config.agent.install_skill {
+        for dir in &config.agent.skill_dirs {
+            let skills_dir = dashr_runtime::skill::expand_home(dir);
+            match dashr_runtime::skill::install(&skills_dir, false) {
+                Ok(dashr_runtime::skill::Outcome::UpToDate(_)) => {}
+                Ok(outcome) => println!("dashr: {outcome}"),
+                Err(error) => println!(
+                    "dashr: skill not installed in {}: {error}",
+                    skills_dir.display()
+                ),
+            }
+        }
+    }
+
     // Chat pane.
     if config.agent.enabled && !stop.load(Ordering::SeqCst) {
         let exe = std::env::current_exe().map_err(|error| error.to_string())?;

@@ -1,6 +1,6 @@
 //! Commands that work without Herdr: sessions, apply, status, MCP, image.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use dashr_core::masking::Masker;
 use dashr_core::session::SessionStore;
@@ -14,9 +14,6 @@ use dashr_runtime::session::{self, Identity};
 
 use crate::Result;
 use crate::herdr_cmds::load_config;
-
-/// The agent skill, shipped in the repository and embedded in the binary.
-pub const SKILL: &str = include_str!("../../../.agents/skills/herdr-dashr/SKILL.md");
 
 fn print_json(value: &impl serde::Serialize) -> Result<()> {
     println!(
@@ -220,14 +217,41 @@ pub fn image_build(paths: &Paths, tag: Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn skill_install() -> Result<()> {
-    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
-    let dir = Path::new(&home)
-        .join(".claude")
-        .join("skills")
-        .join("herdr-dashr");
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    std::fs::write(dir.join("SKILL.md"), SKILL).map_err(|error| error.to_string())?;
-    println!("installed {}", dir.join("SKILL.md").display());
+/// The skills directories to use: `--dir`, else `agent.skill_dirs`.
+fn skill_dirs(paths: &Paths, dir: Option<PathBuf>) -> Result<Vec<PathBuf>> {
+    match dir {
+        Some(dir) => Ok(vec![dir]),
+        None => Ok(load_config(paths)?
+            .agent
+            .skill_dirs
+            .iter()
+            .map(|dir| dashr_runtime::skill::expand_home(dir))
+            .collect()),
+    }
+}
+
+pub fn skill_install(paths: &Paths, dir: Option<PathBuf>, force: bool) -> Result<()> {
+    for skills_dir in skill_dirs(paths, dir)? {
+        let outcome = dashr_runtime::skill::install(&skills_dir, force)
+            .map_err(|error| format!("{}: {error}", skills_dir.display()))?;
+        println!("dashr: {outcome}");
+    }
+    Ok(())
+}
+
+pub fn skill_uninstall(paths: &Paths, dir: Option<PathBuf>) -> Result<()> {
+    for skills_dir in skill_dirs(paths, dir)? {
+        match dashr_runtime::skill::uninstall(&skills_dir) {
+            Ok(true) => println!(
+                "dashr: removed the herdr-dashr skill from {}",
+                skills_dir.display()
+            ),
+            Ok(false) => println!(
+                "dashr: no dashr-installed skill in {}",
+                skills_dir.display()
+            ),
+            Err(error) => return Err(format!("{}: {error}", skills_dir.display())),
+        }
+    }
     Ok(())
 }
