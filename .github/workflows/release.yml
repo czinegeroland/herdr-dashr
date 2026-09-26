@@ -7,11 +7,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A manual run from `main` releases the manifest version at that commit and
+  # creates the tag itself, for environments that cannot push tags.
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing tag to (re)build, e.g. v0.1.0"
-        required: true
 
 permissions:
   contents: read
@@ -26,21 +24,24 @@ jobs:
         include:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
-          - { target: x86_64-apple-darwin, os: macos-13 }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
           - { target: aarch64-apple-darwin, os: macos-latest }
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - name: Check the tag matches the manifest version
         shell: bash
         env:
-          TAG: ${{ inputs.tag || github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' herdr-plugin.toml | head -n 1)"
-          test "v$version" = "$TAG" || { echo "tag $TAG != manifest v$version"; exit 1; }
+          if [ "$EVENT" = push ]; then
+            test "v$version" = "$REF_NAME" || { echo "tag $REF_NAME != manifest v$version"; exit 1; }
+          else
+            test "$REF_NAME" = main || { echo "manual releases run from main"; exit 1; }
+          fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - run: cargo build --release --locked --bin dashr
       - name: Package
@@ -62,6 +63,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -69,9 +71,10 @@ jobs:
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           ls -l dist
+          TAG="v$(sed -n 's/^version = "\(.*\)"$/\1/p' herdr-plugin.toml | head -n 1)"
+          # Creates the tag at this commit when it does not exist yet.
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
           gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

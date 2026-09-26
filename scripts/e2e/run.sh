@@ -199,6 +199,7 @@ for tool in ("panel_status", "panel_data_sample", "probe_query", "list_datasourc
     for line in by[tool]:
         for value in planted:
             assert value not in line["text"], f"{value} leaked through {tool}"
+assert "Privacy rules" in json.loads(by["initialize"][0]["text"])["instructions"], "no privacy instructions"
 tools = json.loads(by["tools/list"][0]["text"])
 assert "apply_dashboard" in tools and "panel_data_sample" in tools
 assert not by["apply_dashboard"][0]["isError"], by["apply_dashboard"][0]["text"]
