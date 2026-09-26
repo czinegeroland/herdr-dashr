@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T00:45:00Z |
+| Last updated | 2026-09-27T01:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -155,7 +155,7 @@ Crates:
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
 | DASHR-HERDR-001 | `herdr-plugin.toml` is generated from code and a test fails when the checked-in file differs. | Must | Verified | `crates/dashr-cli/tests/plugin_manifest.rs` |
-| DASHR-HERDR-002 | Action `open` opens a new tab: dashboard pane on top, chat pane split below. | Must | Verified | AC-OPEN in `scripts/e2e/run.sh` |
+| DASHR-HERDR-002 | Action `open` opens a new tab: dashboard pane on top, chat pane split below; if the chat pane cannot be opened or recorded, the text view says why. | Must | Verified | AC-OPEN in `scripts/e2e/run.sh` |
 | DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Verified | AC-PIPELINE in `scripts/e2e/run.sh`; `link_pattern_matches_both_consoles` |
 | DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Verified | Startup reaper scenario in `scripts/e2e/run.sh` |
 | DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
@@ -429,6 +429,7 @@ Crates:
 | 2026-09-26 | v0.1.0 published to npm (`herdr-dashr` + four platform packages); `npx herdr-dashr@0.1.0` runs the release binary. Every PRD requirement is Verified. | TECH-005 |
 | 2026-09-27 | Windows support, installed as herdr-remote-channel installs (DEC-038): npm build step and `node` launcher on every platform, a Windows release target and npm package, PowerShell quoting for the chat pane, Windows unit tests in CI, and `.gitattributes` keeping LF on Windows checkouts (the manifest test compares bytes). Version 0.1.1. | HERDR-006, HERDR-008, TECH-004, TECH-005 |
 | 2026-09-27 | npm publish retries survive registry lag: a version the registry refuses as already published counts as published, so re-running a half-finished publish completes it. | TECH-005 |
+| 2026-09-27 | A chat pane that fails to open, or whose id fails to save, is reported on the text view: the view clears the screen, which had hidden the reason when AC-OPEN intermittently found no chat pane. | HERDR-002 |
 
 ### Requirement completion summary
 
