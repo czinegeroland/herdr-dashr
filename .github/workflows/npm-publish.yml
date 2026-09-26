@@ -155,6 +155,13 @@ jobs:
               if npm publish --access public "./$dir" 2>&1 | tee "$log"; [ "${PIPESTATUS[0]}" -eq 0 ]; then
                 return 0
               fi
+              # The registry's read replicas lag its writes, so `npm view` can
+              # miss a version a moment-ago run published; npm then refuses
+              # the duplicate, which means the work is done.
+              if grep -q 'cannot publish over the previously published versions' "$log"; then
+                echo "$name@$version is already published"
+                return 0
+              fi
               # Permission errors do not heal with time: npm reports a
               # refused publish of a new package as E404.
               if grep -qE 'code (E404|E401|E403|EOTP)' "$log"; then

@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T00:30:00Z |
+| Last updated | 2026-09-27T00:45:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -428,6 +428,7 @@ Crates:
 | 2026-09-26 | v0.1.0 released on GitHub (4 checksummed archives). Publish to npm was refused (E404 for a new package: the token may not create packages); it now checks the token first and fails fast on permission errors. The dashboard pane retries opening the chat pane for a few seconds (twice, on the first open after a fresh Herdr server, the split was refused and the agent never started), and the e2e suite prints the pane when that check fails. | TECH-005 |
 | 2026-09-26 | v0.1.0 published to npm (`herdr-dashr` + four platform packages); `npx herdr-dashr@0.1.0` runs the release binary. Every PRD requirement is Verified. | TECH-005 |
 | 2026-09-27 | Windows support, installed as herdr-remote-channel installs (DEC-038): npm build step and `node` launcher on every platform, a Windows release target and npm package, PowerShell quoting for the chat pane, Windows unit tests in CI, and `.gitattributes` keeping LF on Windows checkouts (the manifest test compares bytes). Version 0.1.1. | HERDR-006, HERDR-008, TECH-004, TECH-005 |
+| 2026-09-27 | npm publish retries survive registry lag: a version the registry refuses as already published counts as published, so re-running a half-finished publish completes it. | TECH-005 |
 
 ### Requirement completion summary
 
