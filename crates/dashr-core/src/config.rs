@@ -42,8 +42,42 @@ pub struct Config {
     pub monitor: MonitorConfig,
     pub aws: AwsConfig,
     pub masking: MaskingConfig,
+    pub otel: OtelConfig,
     pub promote: Option<PromoteConfig>,
     pub datasources: Vec<DatasourceConfig>,
+}
+
+/// The image `[otel] enabled = true` runs: Grafana, an OpenTelemetry
+/// collector, Loki, Tempo and Prometheus in one container, so a session is
+/// still exactly one container (requirement DASHR-OTEL-001). Pinned like the
+/// Grafana image.
+pub const DEFAULT_OTEL_IMAGE: &str = "grafana/otel-lgtm:0.34.0";
+
+/// Uids of the datasources the OpenTelemetry image provisions itself.
+pub const OTEL_DATASOURCE_UIDS: &[&str] = &["loki", "tempo", "prometheus", "pyroscope"];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct OtelConfig {
+    /// Run the all-in-one OpenTelemetry image instead of plain Grafana: the
+    /// session then receives OTLP logs, traces and metrics on loopback.
+    pub enabled: bool,
+    pub image: String,
+    /// Memory limit; the stack needs more than Grafana alone.
+    pub memory: String,
+    /// Dashboard refresh for OTel sessions, fast enough for a live log trail.
+    pub refresh: String,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            image: DEFAULT_OTEL_IMAGE.to_owned(),
+            memory: "2g".to_owned(),
+            refresh: "2s".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -379,6 +413,17 @@ impl Config {
                 )));
             }
         }
+        if self.otel.enabled {
+            for datasource in &self.datasources {
+                let uid = datasource.effective_uid();
+                if OTEL_DATASOURCE_UIDS.contains(&uid.as_str()) {
+                    return Err(ConfigError::Invalid(format!(
+                        "datasource uid {uid} is provisioned by the OpenTelemetry image; give {} another uid",
+                        datasource.name
+                    )));
+                }
+            }
+        }
         if let Some(promote) = &self.promote
             && !is_env_name(&promote.token_env)
         {
@@ -443,6 +488,9 @@ skill_dirs = ["~/.claude/skills"]
 
 [aws]
 # profile = "dev"         # short-lived credentials are exported from this profile
+
+[otel]
+enabled = false           # true: one container that also receives OTLP logs, traces and metrics
 
 [masking]
 max_rows = 20
@@ -578,6 +626,20 @@ uid = "same"
             default: false,
         });
         assert!(config.needs_custom_image());
+    }
+
+    #[test]
+    fn otel_mode_reserves_its_datasource_uids() {
+        let text = "[otel]\nenabled = true\n[[datasources]]\nname = \"L\"\nkind = \"loki\"\nurl = \"http://l\"\nuid = \"loki\"\n";
+        assert!(
+            Config::parse(text, "t")
+                .unwrap_err()
+                .to_string()
+                .contains("OpenTelemetry image")
+        );
+        let off = text.replace("enabled = true", "enabled = false");
+        assert!(Config::parse(&off, "t").is_ok());
+        assert_eq!(Config::default().otel.image, DEFAULT_OTEL_IMAGE);
     }
 
     #[test]

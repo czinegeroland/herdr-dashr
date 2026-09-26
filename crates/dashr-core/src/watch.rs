@@ -61,6 +61,16 @@ impl Comparison {
     }
 }
 
+/// How a breach is announced. An alert marks the pane blocked until it
+/// clears; info only notifies (a message that was expected has arrived).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    #[default]
+    Alert,
+    Info,
+}
+
 /// One watch rule.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WatchRule {
@@ -72,6 +82,8 @@ pub struct WatchRule {
     /// Short human wording for the notification, e.g. "DLQ not empty".
     #[serde(default)]
     pub label: Option<String>,
+    #[serde(default)]
+    pub severity: Severity,
 }
 
 impl WatchRule {
@@ -188,6 +200,7 @@ mod tests {
             op,
             threshold,
             label: None,
+            severity: Default::default(),
         }
     }
 

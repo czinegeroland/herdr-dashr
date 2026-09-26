@@ -7,9 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use dashr_aws::cli::AwsCli;
 use dashr_aws::{Inventory, PipelineRef};
 use dashr_core::config::{Config, DEFAULT_IMAGE, DatasourceKind};
-use dashr_core::session::{SessionRecord, SessionStore};
+use dashr_core::session::{Otlp, SessionRecord, SessionStore};
 use dashr_core::{dashboard, ids, provisioning};
-use dashr_docker::{Docker, DockerError, RunSpec};
+use dashr_docker::{Docker, DockerError, Flavor, RunSpec};
 use dashr_grafana::{Client, GrafanaError};
 
 use crate::paths;
@@ -50,6 +50,8 @@ pub enum StartError {
     Io(#[from] std::io::Error),
     #[error("Grafana did not start: {0}")]
     Grafana(#[from] GrafanaError),
+    #[error("the OpenTelemetry endpoint did not start: {0}")]
+    Otlp(String),
     #[error("{0}")]
     Session(#[from] dashr_core::session::SessionError),
 }
@@ -187,7 +189,8 @@ pub fn start(
         &mut warnings,
     );
 
-    if config.needs_custom_image() && config.grafana.image == DEFAULT_IMAGE {
+    if config.needs_custom_image() && config.grafana.image == DEFAULT_IMAGE && !config.otel.enabled
+    {
         warnings.push(
             "Seq and Zabbix datasources need the custom image: run `dashr image build` and set grafana.image"
                 .to_owned(),
@@ -207,11 +210,30 @@ pub fn start(
     if let Some(hash) = &identity.socket_hash {
         labels.insert(dashr_docker::LABEL_SOCKET.to_owned(), hash.clone());
     }
+    // OpenTelemetry mode swaps the image for one that also runs a collector,
+    // Loki, Tempo and Prometheus: still one container per pane (DASHR-OTEL-001).
+    let otel = config.otel.enabled;
+    let (flavor, image, memory, refresh) = if otel {
+        (
+            Flavor::OtelLgtm,
+            config.otel.image.clone(),
+            config.otel.memory.clone(),
+            config.otel.refresh.clone(),
+        )
+    } else {
+        (
+            Flavor::Grafana,
+            config.grafana.image.clone(),
+            config.grafana.memory.clone(),
+            config.grafana.refresh.clone(),
+        )
+    };
     let spec = RunSpec {
         name: container.clone(),
-        image: config.grafana.image.clone(),
+        image,
+        flavor,
         labels,
-        memory: config.grafana.memory.clone(),
+        memory,
         provisioning_dir,
         env: RunSpec::grafana_env(),
         inherit_env: secrets.keys().cloned().collect(),
@@ -233,6 +255,22 @@ pub fn start(
     client
         .wait_healthy(Duration::from_secs(config.grafana.startup_timeout_secs))
         .map_err(|e| cleanup(e.into()))?;
+    let otlp = if otel {
+        let otlp = Otlp {
+            grpc_port: docker
+                .mapped_port(&container, 4317)
+                .map_err(|e| cleanup(e.into()))?,
+            http_port: docker
+                .mapped_port(&container, 4318)
+                .map_err(|e| cleanup(e.into()))?,
+        };
+        crate::otlp::Exporter::new(&otlp.http_endpoint())
+            .wait_ready(Duration::from_secs(config.grafana.startup_timeout_secs))
+            .map_err(|e| cleanup(StartError::Otlp(e)))?;
+        Some(otlp)
+    } else {
+        None
+    };
 
     let record = SessionRecord {
         session_id: identity.session_id.clone(),
@@ -243,9 +281,10 @@ pub fn start(
         dashboard_uid: ids::dashboard_uid(&identity.session_id),
         chat_pane: None,
         runtime_dir: runtime_dir.clone(),
-        refresh: config.grafana.refresh.clone(),
+        refresh,
         datasources: provisioned.policies,
         pipeline: pipeline.map(|p| format!("{} ({})", p.name, p.region)),
+        otlp,
         started_unix: now_unix(),
     };
     store.save(&record).map_err(|e| cleanup(e.into()))?;
@@ -274,6 +313,13 @@ pub fn start(
                 )
             }
         },
+        _ if otel => {
+            let otlp = record.otlp.unwrap_or(Otlp {
+                grpc_port: 0,
+                http_port: 0,
+            });
+            dashboard::otel_welcome(&otlp.http_endpoint(), &otlp.grpc_endpoint())
+        }
         _ => dashboard::welcome(
             "dashr",
             "A disposable Grafana owned by this pane. Nothing is stored; it stops when the pane closes.\n\nAsk the agent below for the dashboard you need.",

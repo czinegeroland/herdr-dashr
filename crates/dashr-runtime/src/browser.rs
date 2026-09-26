@@ -248,6 +248,13 @@ impl Browser {
         cdp_call(&page, "Page.reload", json!({"ignoreCache": true})).map(|_| ())
     }
 
+    /// Points the page showing `url_fragment` at `url`. Used when the time
+    /// range must change: a reload keeps the range Grafana put in the URL.
+    pub fn navigate(&self, url_fragment: &str, url: &str) -> Result<(), BrowserError> {
+        let page = self.page(url_fragment)?;
+        cdp_call(&page, "Page.navigate", json!({"url": url})).map(|_| ())
+    }
+
     /// A PNG of the page showing `url_fragment`, base64 encoded.
     pub fn screenshot(&self, url_fragment: &str) -> Result<String, BrowserError> {
         let page = self.page(url_fragment)?;

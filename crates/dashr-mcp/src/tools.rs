@@ -38,10 +38,16 @@ Workflow: list_datasources -> probe_query to learn the shape of data -> apply_da
 Use watch_panel to alert the human when a panel crosses a threshold; the pane evaluates it locally. \
 promote copies a useful dashboard to the team's persistent Grafana.
 
+OpenTelemetry sessions (session_info shows the OTLP endpoint) hold logs, traces and metrics in \
+Loki, Tempo and Prometheus. To check that the right log messages fire, arm them with expect_logs: \
+the dashboard gains a tile per message (green when seen, red for a forbidden one) and a live \
+trail highlighting them; log_expectations returns the verdict as counts.
+
 Follow the herdr-dashr skill for the full loop, panel JSON and query models per datasource. \
 If the skill is not loaded, read the same guide from this server's resources: \
 dashr://guide/SKILL.md, dashr://guide/reference/dashboard-json.md, \
-dashr://guide/reference/datasources.md, dashr://guide/reference/recipes.md.";
+dashr://guide/reference/datasources.md, dashr://guide/reference/recipes.md, \
+dashr://guide/reference/otel-and-logs.md.";
 
 fn tool(name: &str, description: &str, schema: Value) -> Value {
     json!({"name": name, "description": description, "inputSchema": schema})
@@ -363,7 +369,11 @@ impl DashrTools {
             label: arguments
                 .get("label")
                 .and_then(Value::as_str)
-                .map(|label| label.chars().take(60).collect()),
+                .map(|label| label.chars().take(60).collect::<String>()),
+            severity: match arguments.get("severity").and_then(Value::as_str) {
+                Some("info") => dashr_core::watch::Severity::Info,
+                _ => dashr_core::watch::Severity::Alert,
+            },
         };
         state.rules.push(rule.clone());
         if let Err(error) = self.store.save_watches(&record.session_id, &state) {
@@ -396,6 +406,91 @@ impl DashrTools {
         }
         match self.store.save_watches(&self.session_id, &state) {
             Ok(()) => ToolOutput::Json(json!({"removed": id})),
+            Err(error) => ToolOutput::Error(error.to_string()),
+        }
+    }
+
+    fn session_info(&self) -> ToolOutput {
+        let record = match self.record() {
+            Ok(record) => record,
+            Err(error) => return ToolOutput::Error(error),
+        };
+        let loki = dashr_runtime::logx::loki_uid(&record, None).ok();
+        ToolOutput::Json(json!({
+            "session_id": record.session_id,
+            "mode": if record.otlp.is_some() { "opentelemetry" } else { "grafana" },
+            "otlp": record.otlp.map(|otlp| json!({
+                "http_endpoint": otlp.http_endpoint(),
+                "grpc_endpoint": otlp.grpc_endpoint(),
+                "env": {"OTEL_EXPORTER_OTLP_ENDPOINT": otlp.http_endpoint()},
+                "tail": "dashr tail -- <command>   (ships a command's stdout/stderr as logs)"
+            })),
+            "log_expectations": loki.is_some(),
+            "loki_datasource": loki,
+            "pipeline": record.pipeline,
+        }))
+    }
+
+    fn expect_logs(&self, arguments: &Value) -> ToolOutput {
+        let record = match self.record() {
+            Ok(record) => record,
+            Err(error) => return ToolOutput::Error(error),
+        };
+        let Some(list) = arguments.get("expectations") else {
+            return ToolOutput::Error("expect_logs needs `expectations`".into());
+        };
+        let expectations = match dashr_runtime::logx::expectations_from_json(list) {
+            Ok(expectations) => expectations,
+            Err(error) => return ToolOutput::Error(error),
+        };
+        match dashr_runtime::logx::arm(
+            &record,
+            &Self::client(&record),
+            self.browser.as_ref(),
+            &self.store,
+            &self.config.grafana.time_from,
+            expectations,
+            arguments.get("selector").and_then(Value::as_str),
+            arguments.get("datasource_uid").and_then(Value::as_str),
+        ) {
+            Ok(armed) => ToolOutput::Json(json!({
+                "armed": armed.expectations,
+                "armed_at_ms": armed.armed_at_ms,
+                "selector": armed.selector,
+                "datasource_uid": armed.datasource_uid,
+                "dashboard_version": armed.dashboard.version,
+                "notes": armed.notes,
+                "next": "have the human (or yourself) run the code under test, then call log_expectations; the pane notifies the human as messages arrive"
+            })),
+            Err(error) => ToolOutput::Error(format!("expectations not armed: {error}")),
+        }
+    }
+
+    fn log_expectations(&self) -> ToolOutput {
+        let record = match self.record() {
+            Ok(record) => record,
+            Err(error) => return ToolOutput::Error(error),
+        };
+        match dashr_runtime::logx::check(&record, &Self::client(&record), &self.store, &self.masker)
+        {
+            Ok(report) => ToolOutput::Json(json!({"report": report})),
+            Err(error) => ToolOutput::Error(error.to_string()),
+        }
+    }
+
+    fn clear_log_expectations(&self) -> ToolOutput {
+        let record = match self.record() {
+            Ok(record) => record,
+            Err(error) => return ToolOutput::Error(error),
+        };
+        match dashr_runtime::logx::clear(
+            &record,
+            &Self::client(&record),
+            self.browser.as_ref(),
+            &self.store,
+            &self.config.grafana.time_from,
+        ) {
+            Ok(was_armed) => ToolOutput::Json(json!({"cleared": was_armed})),
             Err(error) => ToolOutput::Error(error.to_string()),
         }
     }
@@ -598,7 +693,8 @@ impl Tools for DashrTools {
                     "reducer": {"type": "string", "enum": ["last", "max", "min", "mean", "sum", "count"]},
                     "op": {"type": "string", "enum": [">", ">=", "<", "<=", "==", "!="]},
                     "threshold": {"type": "number"},
-                    "label": {"type": "string", "description": "Short notification text, e.g. 'DLQ not empty'."}
+                    "label": {"type": "string", "description": "Short notification text, e.g. 'DLQ not empty'."},
+                    "severity": {"type": "string", "enum": ["alert", "info"], "description": "alert (default) marks the pane blocked; info only notifies."}
                 }}),
             ),
             tool(
@@ -622,6 +718,35 @@ impl Tools for DashrTools {
                 json!({"type": "object", "required": ["url"], "properties": {"url": {"type": "string"}}}),
             ),
             tool(
+                "session_info",
+                "This session's mode and, in OpenTelemetry mode, the OTLP endpoint programs should export to.",
+                empty.clone(),
+            ),
+            tool(
+                "expect_logs",
+                "Arm log messages to look for. Adds to the top of the dashboard one tile per expectation (grey 'waiting' then green when an expected message is logged; green 'none' then red when a forbidden one is) and a live log trail with matching lines highlighted. Counting starts now; arming again replaces the set. The pane notifies the human as they fire. Patterns are case-insensitive regular expressions without (? constructs or backticks.",
+                json!({"type": "object", "required": ["expectations"], "properties": {
+                    "expectations": {"type": "array", "minItems": 1, "maxItems": dashr_core::logx::MAX_EXPECTATIONS, "items": {
+                        "type": "object", "required": ["name", "pattern"], "properties": {
+                            "name": {"type": "string", "description": "Tile title, e.g. 'order created'."},
+                            "pattern": {"type": "string", "description": "e.g. 'order \\d+ created'"},
+                            "expect": {"type": "string", "enum": ["present", "absent"], "description": "present (default): should be logged; absent: must not be."}
+                        }}},
+                    "selector": {"type": "string", "description": "LogQL stream selector; default every service: {service_name=~\".+\"}. e.g. {service_name=\"checkout\"}"},
+                    "datasource_uid": {"type": "string", "description": "A Loki datasource; default the session's."}
+                }}),
+            ),
+            tool(
+                "log_expectations",
+                "The verdict on the armed expectations: per expectation the count of matching lines since arming and waiting/seen/clear/violated, plus passed. Counts only, never lines.",
+                empty.clone(),
+            ),
+            tool(
+                "clear_log_expectations",
+                "Remove the expectation tiles, the trail and their notifications from the dashboard.",
+                empty.clone(),
+            ),
+            tool(
                 "promote",
                 "Copy the current dashboard to the persistent Grafana configured by the human, remapping datasources by name.",
                 json!({"type": "object", "properties": {"title": {"type": "string"}}}),
@@ -643,6 +768,10 @@ impl Tools for DashrTools {
             "screenshot" => self.screenshot(),
             "open_for_pipeline" => self.open_for_pipeline(arguments),
             "promote" => self.promote(arguments),
+            "session_info" => self.session_info(),
+            "expect_logs" => self.expect_logs(arguments),
+            "log_expectations" => self.log_expectations(),
+            "clear_log_expectations" => self.clear_log_expectations(),
             other => ToolOutput::Error(format!("unknown tool {other}")),
         }
     }
@@ -727,6 +856,7 @@ mod tests {
                         op: Comparison::Gt,
                         threshold: 0.0,
                         label: None,
+                        severity: Default::default(),
                     }],
                     breached: vec!["w1".into()],
                 },

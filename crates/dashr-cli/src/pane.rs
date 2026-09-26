@@ -25,7 +25,7 @@ use dashr_runtime::status::PanelState;
 use serde_json::json;
 
 use crate::Result;
-use crate::herdr_cmds::{ORIGIN_CWD_ENV, PIPELINE_ENV, load_config};
+use crate::herdr_cmds::{ORIGIN_CWD_ENV, OTEL_ENV, PIPELINE_ENV, load_config};
 
 /// Reports monitor ticks to Herdr for one pane.
 struct HerdrReporter {
@@ -106,7 +106,16 @@ Call panel_status, fix what is empty or failing, then ask the human what they ar
         Some(Err(_)) => prompt.push_str(
             " Inspecting the pipeline failed (see the dashboard's text panel). Ask the human for what to look at.",
         ),
+        None if started.record.otlp.is_some() => {}
         None => prompt.push_str(" Call list_datasources, then ask the human what they want to see."),
+    }
+    if let Some(otlp) = &started.record.otlp {
+        prompt.push_str(&format!(
+            " This session also receives OpenTelemetry: logs, traces and metrics sent to {} (OTLP/HTTP; OTEL_EXPORTER_OTLP_ENDPOINT is set in your shell) land in its Loki, Tempo and Prometheus. \
+`dashr tail -- <command>` ships any command's output as logs. When the human wants to check that the right log messages fire, arm them with expect_logs and read the verdict with log_expectations. \
+Ask the human what they are testing.",
+            otlp.http_endpoint()
+        ));
     }
     prompt
 }
@@ -131,6 +140,18 @@ fn render_text_view(out: &mut impl Write, record: &SessionRecord, tick: Option<&
     let _ = writeln!(out, "           (Ctrl-click to open it in your browser)");
     if let Some(pipeline) = &record.pipeline {
         let _ = writeln!(out, "Pipeline:  {pipeline}");
+    }
+    if let Some(otlp) = &record.otlp {
+        let _ = writeln!(
+            out,
+            "OTLP:      {} (HTTP) · {} (gRPC)",
+            otlp.http_endpoint(),
+            otlp.grpc_endpoint()
+        );
+        let _ = writeln!(
+            out,
+            "           dashr tail -- <command>   ships its output here"
+        );
     }
     let _ = writeln!(out, "{note}");
     let _ = writeln!(out);
@@ -196,7 +217,10 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         .ok_or("HERDR_SOCKET_PATH is not set; run this from Herdr")?;
     let herdr_bin = env.herdr_bin();
     let herdr = Herdr::new(&herdr_bin);
-    let config = load_config(paths)?;
+    let mut config = load_config(paths)?;
+    if std::env::var(OTEL_ENV).is_ok_and(|value| value == "1") {
+        config.otel.enabled = true;
+    }
     let store = SessionStore::new(&paths.state_dir);
     let docker = Docker::new(&config.docker.command);
     let aws = dashr_aws::cli::AwsCli::new(&config.aws.cli, config.aws.profile.as_deref());
@@ -224,7 +248,11 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
 
     println!(
         "dashr: starting a disposable Grafana ({})…",
-        config.grafana.image
+        if config.otel.enabled {
+            &config.otel.image
+        } else {
+            &config.grafana.image
+        }
     );
     let _ = herdr.report_agent(&pane_id, AgentState::Working, Some("starting Grafana"));
     let started = match session::start(
@@ -287,7 +315,18 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         let cwd = std::env::var(ORIGIN_CWD_ENV)
             .ok()
             .filter(|cwd| Path::new(cwd).is_dir());
-        let split_env = vec![("DASHR_SESSION".to_owned(), record.session_id.clone())];
+        let mut split_env = vec![("DASHR_SESSION".to_owned(), record.session_id.clone())];
+        // Programs started from the chat pane export to this session.
+        if let Some(otlp) = &record.otlp {
+            split_env.push((
+                "OTEL_EXPORTER_OTLP_ENDPOINT".to_owned(),
+                otlp.http_endpoint(),
+            ));
+            split_env.push((
+                "OTEL_EXPORTER_OTLP_PROTOCOL".to_owned(),
+                "http/protobuf".to_owned(),
+            ));
+        }
         // Herdr's ratio is the share the split pane keeps (observed, 0.9.1).
         match herdr.pane_split(
             &pane_id,

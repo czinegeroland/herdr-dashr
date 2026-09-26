@@ -65,6 +65,43 @@ enum Command {
         #[arg(long)]
         title: Option<String>,
     },
+    /// Run a command and ship its stdout and stderr lines to a session's
+    /// OpenTelemetry endpoint (or ship stdin when no command is given).
+    /// The output still reaches the terminal and the exit code passes through.
+    Tail {
+        /// Defaults to $DASHR_SESSION, else the only OpenTelemetry session.
+        #[arg(long)]
+        session: Option<String>,
+        /// The `service.name` the lines are stored under; defaults to the
+        /// command's name.
+        #[arg(long)]
+        service: Option<String>,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// Arm log expectations on a session's dashboard: tiles that turn green
+    /// when an expected message is logged (red for a forbidden one) and a
+    /// live trail highlighting them. `'NAME = PATTERN'` or just `PATTERN`.
+    Expect {
+        /// Defaults to $DASHR_SESSION, else the only session with Loki.
+        #[arg(long)]
+        session: Option<String>,
+        /// A message that should appear (repeatable).
+        #[arg(short = 'p', long = "present")]
+        present: Vec<String>,
+        /// A message that must not appear (repeatable).
+        #[arg(short = 'a', long = "absent")]
+        absent: Vec<String>,
+        /// LogQL stream selector, e.g. '{service_name="checkout"}'.
+        #[arg(long)]
+        selector: Option<String>,
+        /// Print the current verdict instead of arming; exit 1 unless passed.
+        #[arg(long, conflicts_with_all = ["present", "absent", "clear"])]
+        check: bool,
+        /// Remove the expectations from the dashboard.
+        #[arg(long, conflicts_with_all = ["present", "absent"])]
+        clear: bool,
+    },
     /// Inspect a CodePipeline and print the inventory and proposed dashboard.
     Pipeline {
         url: String,
@@ -115,6 +152,10 @@ enum SessionCommand {
         name: String,
         #[arg(long)]
         pipeline: Option<String>,
+        /// Start in OpenTelemetry mode (Grafana with Loki, Tempo, Prometheus
+        /// and an OTLP endpoint), whatever the configuration says.
+        #[arg(long)]
+        otel: bool,
     },
     /// Stop a session and delete its files.
     Stop { session: String },
@@ -194,9 +235,11 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Mcp { session, herdr_bin } => standalone::mcp(&paths, &session, herdr_bin),
         Command::Session { command } => match command {
-            SessionCommand::Start { name, pipeline } => {
-                standalone::session_start(&paths, &name, pipeline.as_deref())
-            }
+            SessionCommand::Start {
+                name,
+                pipeline,
+                otel,
+            } => standalone::session_start(&paths, &name, pipeline.as_deref(), otel),
             SessionCommand::Stop { session } => standalone::session_stop(&paths, &session),
             SessionCommand::List => standalone::session_list(&paths),
         },
@@ -205,6 +248,29 @@ fn run(cli: Cli) -> Result<()> {
         Command::Promote { session, title } => {
             standalone::promote(&paths, &session, title.as_deref())
         }
+        Command::Tail {
+            session,
+            service,
+            command,
+        } => standalone::tail(&paths, session.as_deref(), service.as_deref(), &command),
+        Command::Expect {
+            session,
+            present,
+            absent,
+            selector,
+            check,
+            clear,
+        } => standalone::expect(
+            &paths,
+            session.as_deref(),
+            standalone::ExpectRequest {
+                present,
+                absent,
+                selector,
+                check,
+                clear,
+            },
+        ),
         Command::Pipeline {
             url,
             dashboard_only,

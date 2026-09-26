@@ -77,9 +77,21 @@ human can see them.
 | `screenshot` | Layout check — non-personal dashboards only. |
 | `open_for_pipeline` | Inspect an AWS CodePipeline and apply a first dashboard. |
 | `promote` | Copy the dashboard to the team's persistent Grafana. |
+| `session_info` | Mode and, in OpenTelemetry mode, the OTLP endpoint programs export to. |
+| `expect_logs` / `log_expectations` / `clear_log_expectations` | "Did the right log messages fire?" — tiles per expected (or forbidden) message, a highlighted live trail, a counts-only verdict. |
 
 The same references are available as MCP resources (`dashr://guide/...`) if
 this skill's files are not on disk.
+
+## OpenTelemetry sessions and log checks
+
+When `session_info` says `opentelemetry`, the session's own Loki, Tempo and
+Prometheus receive whatever is sent to its OTLP endpoint, and `dashr tail --
+<command>` ships any command's output as logs. The human's typical ask is
+"run this and show me the right messages are logged": arm them with
+`expect_logs`, let the code run, then answer from `log_expectations`. Details,
+LogQL/TraceQL/PromQL for OTel data and patterns that work are in
+`reference/otel-and-logs.md`.
 
 ## Choosing panels
 

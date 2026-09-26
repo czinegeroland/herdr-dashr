@@ -8,7 +8,9 @@
 
 pub mod apply;
 pub mod browser;
+pub mod logx;
 pub mod monitor;
+pub mod otlp;
 pub mod paths;
 pub mod promote;
 pub mod session;

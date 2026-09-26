@@ -187,6 +187,58 @@ fn datasource_entry(datasource: &DatasourceConfig, is_default: bool) -> Value {
     Value::Object(entry)
 }
 
+/// The datasources the OpenTelemetry image provisions itself
+/// (DASHR-OTEL-002). Logs and traces carry whatever the application wrote,
+/// so they are personal; the resource and severity labels are safe to show.
+/// Metrics and profiles are numbers keyed by names the application chose.
+pub fn otel_policies() -> Vec<DatasourcePolicy> {
+    let policy = |uid: &str, name: &str, plugin_type: &str, personal: bool, allow: &[&str]| {
+        DatasourcePolicy {
+            uid: uid.to_owned(),
+            name: name.to_owned(),
+            plugin_type: plugin_type.to_owned(),
+            personal,
+            allow_fields: allow.iter().map(|field| (*field).to_owned()).collect(),
+        }
+    };
+    vec![
+        policy(
+            "loki",
+            "Loki (OpenTelemetry logs)",
+            "loki",
+            true,
+            &[
+                "service_name",
+                "detected_level",
+                "severity_text",
+                "level",
+                "log_iostream",
+            ],
+        ),
+        policy(
+            "tempo",
+            "Tempo (OpenTelemetry traces)",
+            "tempo",
+            true,
+            &["service_name"],
+        ),
+        policy(
+            "prometheus",
+            "Prometheus (OpenTelemetry metrics)",
+            "prometheus",
+            false,
+            &[],
+        ),
+        policy(
+            "pyroscope",
+            "Pyroscope (profiles)",
+            "grafana-pyroscope-datasource",
+            false,
+            &[],
+        ),
+    ]
+}
+
 /// Builds the provisioning for a session.
 ///
 /// `extra` holds datasources added for this session only, such as the
@@ -222,7 +274,7 @@ pub fn build(config: &Config, extra: &[DatasourceConfig]) -> Provisioning {
     env_names.sort();
     env_names.dedup();
 
-    let policies = all
+    let mut policies: Vec<DatasourcePolicy> = all
         .iter()
         .map(|datasource| DatasourcePolicy {
             uid: datasource.effective_uid(),
@@ -232,6 +284,9 @@ pub fn build(config: &Config, extra: &[DatasourceConfig]) -> Provisioning {
             allow_fields: datasource.allow_fields.clone(),
         })
         .collect();
+    if config.otel.enabled {
+        policies.extend(otel_policies());
+    }
 
     let document = json!({
         "apiVersion": 1,
@@ -250,6 +305,31 @@ mod tests {
 
     fn parse(text: &str) -> Config {
         Config::parse(text, "test").expect("config parses")
+    }
+
+    #[test]
+    fn otel_mode_adds_the_image_datasources_to_the_policies_only() {
+        let mut config = Config::default();
+        config.otel.enabled = true;
+        let provisioning = build(&config, &[]);
+        let document: Value = serde_json::from_str(&provisioning.datasources_file).unwrap();
+        // The image provisions its own; dashr only needs to know how to mask.
+        assert_eq!(document["datasources"].as_array().unwrap().len(), 1);
+        let uids: Vec<&str> = provisioning
+            .policies
+            .iter()
+            .map(|p| p.uid.as_str())
+            .collect();
+        assert_eq!(
+            uids,
+            [TESTDATA_UID, "loki", "tempo", "prometheus", "pyroscope"]
+        );
+        assert!(provisioning.policies[1].personal, "logs are personal");
+        assert!(!provisioning.policies[3].personal, "metrics are not");
+        for uid in crate::config::OTEL_DATASOURCE_UIDS {
+            assert!(uids.contains(uid));
+        }
+        assert!(build(&Config::default(), &[]).policies.len() == 1);
     }
 
     #[test]

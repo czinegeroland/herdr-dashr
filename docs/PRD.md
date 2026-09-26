@@ -9,9 +9,9 @@
 | Herdr plugin id | `herdr-dashr` |
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Draft |
-| PRD version | 0.2.0 |
-| Delivery phase | v0.2.0 - agent skill |
-| Last updated | 2026-09-26T08:45:00Z |
+| PRD version | 0.3.0 |
+| Delivery phase | v0.3.0 - OpenTelemetry and live log checks |
+| Last updated | 2026-09-26T14:10:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -102,6 +102,10 @@ unsolicited core pull requests, so a plugin is the only delivery path.
 - **UC-003** Ask the agent to alert when a panel crosses a threshold; get a
   Herdr notification and a blocked pane without the agent seeing values.
 - **UC-004** Promote a useful dashboard to the team's Grafana.
+- **UC-005** "I am about to run this; show me the right log messages fire":
+  send the program's logs (OTLP, or `dashr tail`) to the pane's own Loki, name
+  the messages that should and must not appear, and watch a tile per message
+  turn green (or red) above a live, highlighted log trail.
 
 ## 6. Architecture
 
@@ -127,7 +131,7 @@ Crates:
 | `dashr-docker` | Container argv, lifecycle and orphan detection via the `docker` CLI. |
 | `dashr-herdr` | Manifest generation, plugin environment, `herdr` CLI wrapper. |
 | `dashr-aws` | CodePipeline URL parsing, discovery via the `aws` CLI, first-dashboard proposal. |
-| `dashr-runtime` | Session start/stop, apply, panel status, browser control, monitor tick, promote. |
+| `dashr-runtime` | Session start/stop, apply, panel status, browser control, monitor tick, promote, OTLP export and `dashr tail`, log expectations. |
 | `dashr-mcp` | MCP stdio server and the agent's tools. |
 | `dashr-cli` | The `dashr` binary: Herdr entrypoints and standalone commands. |
 
@@ -140,6 +144,7 @@ Crates:
 | M2 | `dashr` binary and Herdr wiring: manifest, actions, panes, hooks, install. |
 | M3 | End-to-end suite against real Herdr and Grafana in CI; releases. |
 | M4 | Agent skill for dynamic dashboard building (v0.2.0). |
+| M5 | OpenTelemetry mode and live log checks (v0.3.0). |
 
 ## 8. Functional requirements
 
@@ -244,6 +249,7 @@ Crates:
 | DASHR-ALERT-002 | A new breach marks the dashboard pane blocked with the rule wording (no values). | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
 | DASHR-ALERT-003 | A new breach raises one Herdr notification when `monitor.notify` is on. | Should | Verified | `a_new_breach_blocks_and_notifies_once` |
 | DASHR-ALERT-004 | When every breach clears, the pane returns to idle. | Should | Verified | Watch-removal scenario in `scripts/e2e/run.sh`; `clearing_the_last_breach_returns_to_idle` |
+| DASHR-ALERT-005 | A watch has a severity: `alert` (default) blocks the pane, `info` only notifies. A panel that returns no data keeps its watch's state instead of clearing it and notifying again (DEC-032). | Should | Verified | `an_info_watch_notifies_without_blocking`, `no_data_keeps_a_rule_as_it_was`; AC-LOGX in `scripts/e2e/run.sh` |
 
 ### 8.10 Promote (PROMO)
 
@@ -273,7 +279,28 @@ Crates:
 | DASHR-SKILL-001 | The plugin ships a dashboard-building agent skill — the loop from question to verified dashboard, privacy rules, dashboard JSON, query models for every supported datasource, debugging recipes — embedded in the binary. | Must | Verified | `.agents/skills/herdr-dashr/`; `dashr_runtime::skill::FILES`; `skill_carries_the_marker_and_frontmatter` |
 | DASHR-SKILL-002 | The plugin's build step installs the skill for Claude Code, and the dashboard pane refreshes it before the agent starts; neither ever replaces or removes a skill dashr did not write, and the build step never fails the install. | Must | Verified | `herdr-plugin.toml` build step; `install_refresh_and_uninstall_respect_ownership`; skill scenario and AC-OPEN skill check in `scripts/e2e/run.sh` |
 | DASHR-SKILL-003 | The same guide is served as MCP resources (`dashr://guide/...`) and named in the server instructions, so agents without skill support get it too. | Should | Verified | `resources_are_listed_and_read`, `resources_map_to_files`; skill scenario in `scripts/e2e/run.sh` |
+| DASHR-SKILL-005 | The skill covers OpenTelemetry sessions and log checks: the endpoint, `dashr tail`, the expectation tools, pattern rules and LogQL/TraceQL/PromQL for OTel data. | Should | Verified | `.agents/skills/herdr-dashr/reference/otel-and-logs.md`; skill scenario in `scripts/e2e/run.sh` (five resources) |
 | DASHR-SKILL-004 | Every example dashboard and query-model snippet in the skill is valid: examples pass dashr's validation, snippets parse, and the TestData example renders with every panel `ok` on a real Grafana. | Must | Verified | `every_dashboard_example_is_valid`, `every_query_model_snippet_is_json`; skill scenario in `scripts/e2e/run.sh` |
+
+### 8.13 OpenTelemetry (OTEL)
+
+| ID | Requirement | Priority | Status | Evidence |
+|---|---|---|---|---|
+| DASHR-OTEL-001 | OpenTelemetry mode (`[otel] enabled`, the `otel` action or `dashr session start --otel`) runs exactly one container per pane — `grafana/otel-lgtm` with Grafana, an OpenTelemetry collector, Loki, Tempo and Prometheus — hardened like the plain Grafana, with Grafana and OTLP (gRPC 4317, HTTP 4318) on loopback only. The pane is ready only when the collector accepts OTLP. | Must | Verified | `otel_flavor_is_one_hardened_container_receiving_otlp_on_loopback`; AC-OTEL in `scripts/e2e/run.sh` (`docker inspect`, one container per session) |
+| DASHR-OTEL-002 | dashr knows the image's datasources and how to mask them: Loki and Tempo personal (resource and severity labels allowed), Prometheus and Pyroscope not. Configured datasources may not reuse their uids. | Must | Verified | `otel_mode_adds_the_image_datasources_to_the_policies_only`, `otel_mode_reserves_its_datasource_uids`; AC-OTEL masked log sample |
+| DASHR-OTEL-003 | The endpoint is announced where it is needed: the session record, the text view, `OTEL_EXPORTER_OTLP_ENDPOINT` in the chat pane, the agent's opening prompt, the `session_info` tool and a welcome dashboard (endpoint, all logs, recent traces). | Must | Verified | `otel_welcome_validates_against_the_otel_datasources`; AC-OTEL text-view and chat-pane checks in `scripts/e2e/run.sh` |
+| DASHR-OTEL-004 | `dashr tail [--service] -- <command>` (or stdin) ships every stdout and stderr line to the session as OTLP logs with `service.name`, the stream and a severity guessed from the line, colour escapes removed. Output reaches the terminal unchanged, the command's exit code passes through, and a shipping failure is reported once, never failing the command. | Must | Verified | `pump_echoes_everything_and_ships_clean_non_empty_lines`, `tail_passes_the_exit_code_through`, `unreachable_endpoint_drops_lines_without_failing`, `payload_is_otlp_json_with_service_and_stream`, `lines_are_cleaned_of_terminal_escapes`; AC-LOGX exit-code check |
+| DASHR-OTEL-005 | Traces and metrics sent to the endpoint are queryable from the agent's tools through Tempo and Prometheus, masked like any other datasource. | Should | Verified | AC-OTEL traces-and-metrics scenario in `scripts/e2e/run.sh` |
+
+### 8.14 Live log checks (LOGX)
+
+| ID | Requirement | Priority | Status | Evidence |
+|---|---|---|---|---|
+| DASHR-LOGX-001 | Log expectations (name, pattern, `present` or `absent`; up to 12; an optional LogQL stream selector and Loki datasource) are armed through `expect_logs` or `dashr expect`. Patterns are case-insensitive and limited to what means the same to Loki and to the browser; others are refused. Works with the OpenTelemetry Loki or any configured Loki. | Must | Verified | `validation_keeps_patterns_portable`, `js_folding_matches_case_insensitively_and_keeps_classes_and_escapes`, `picks_the_loki_datasource`, `parses_named_and_bare_expectations`; AC-LOGX refusal in `scripts/e2e/run.sh` |
+| DASHR-LOGX-002 | Arming puts a section at the top of the current dashboard: one tile per expectation counting matching lines (grey "waiting" then green for an expected message, green "none" then red for a forbidden one) and a live log trail, newest first, with expected lines on green and forbidden lines on red. The agent's panels move down; arming again replaces the section; clearing removes it and restores the layout. | Must | Verified | `section_has_tiles_then_a_highlighted_trail`, `merge_puts_the_section_on_top_and_replaces_an_earlier_one`; browser trail-colour scenario and AC-LOGX clear in `scripts/e2e/run.sh` |
+| DASHR-LOGX-003 | Counting starts when the expectations are armed, and the browser pane moves to that time range (DEC-031). | Must | Verified | `rfc3339_formats_utc`, `count_query_is_case_insensitive_and_zero_filled`; browser scenario ("moved the browser to the armed time range") and AC-LOGX in `scripts/e2e/run.sh` |
+| DASHR-LOGX-004 | The pane notifies the human as each expected message arrives, marks itself blocked with the expectation's name when a forbidden one does, and returns to idle when the expectations are cleared. | Must | Verified | `watches_notify_for_expected_and_alert_for_forbidden`, `an_info_watch_notifies_without_blocking`; AC-LOGX in `scripts/e2e/run.sh` |
+| DASHR-LOGX-005 | The verdict (`log_expectations`, `dashr expect --check` and its exit status) carries counts and waiting/seen/clear/violated per expectation, never a line. | Must | Verified | `outcomes`; AC-LOGX "counts only" check in `scripts/e2e/run.sh` |
 
 ## 9. Security requirements
 
@@ -292,7 +319,9 @@ Crates:
 
 - Dashboard pane ready (Grafana healthy, first dashboard applied) within the
   configured timeout, 90 s by default; typically under 15 s with a pulled image.
-- Memory: Grafana limited to `grafana.memory` (768 MiB by default).
+- Memory: Grafana limited to `grafana.memory` (768 MiB by default); the
+  OpenTelemetry container to `otel.memory` (2 GiB by default).
+- A line shipped with `dashr tail` is countable within a few seconds.
 - The binary is a single executable with no runtime dependency beyond
   `docker` and, optionally, `terminal-browser`, the agent CLI and `aws`.
 
@@ -304,6 +333,9 @@ Crates:
 - **Fake CLIs** (shell scripts) for `herdr`, `aws` and error paths.
 - **End-to-end** (M3): real Herdr server, real Grafana container, plugin
   linked, action invoked, MCP driven over stdio, pane closed, container gone.
+  The OpenTelemetry scenario ships real lines with `dashr tail`, sends OTLP
+  traces and metrics, and reads the live trail's highlight colours from the
+  browser pane over CDP.
 
 ## 12. Decisions
 
@@ -337,6 +369,10 @@ Crates:
 | DEC-026 | Runtime directories under shared bases (`/dev/shm`, `/tmp`) are `herdr-dashr-<user>`: the first user's 0700 `herdr-dashr` locked other users out and pushed them to disk. |
 | DEC-027 | The skill is embedded in the binary and installed by a plugin build step (`bin/dashr skill install --best-effort`) plus a refresh from the dashboard pane, and served as MCP resources. The build step pins the skill to the binary that serves its tools; ownership is marked in `SKILL.md` so user skills are never overwritten. The plugin version moves to 0.2.0 because the build step needs a binary that has `skill install`. |
 | DEC-028 | npm distribution follows herdr-remote-channel: per-platform packages with the verified binary inside, a `bin.js` shim, a publish workflow triggered by the Release workflow. Unlike herdr-remote-channel, the plugin manifest keeps running `bin/dashr`: `install.sh` takes the binary from npm when it can and falls back to the GitHub release, so the plugin needs no Node at run time and installs keep working before a version reaches npm. |
+| DEC-029 | OpenTelemetry mode swaps the image for `grafana/otel-lgtm` (pinned, 0.34.0) rather than adding containers: the constraint is one container per pane, and the image already runs Grafana, a collector, Loki, Tempo and Prometheus. It keeps the plain container's hardening; `/data`, `/tmp` and `/var/tempo` are tmpfs (Tempo will not start without the last), dashr's provisioning file is mounted into the image's provisioning directory beside its own datasources, plugin preinstall is off, and the minimum refresh is 1 s. |
+| DEC-030 | `dashr tail` speaks OTLP/HTTP with JSON bodies, which the collector accepts: no protobuf or gRPC dependency. Lines are batched every 250 ms (500 at most); the severity is read from the line's own words, stdout defaults to INFO and stderr to unspecified rather than error. |
+| DEC-031 | Expectations are matched twice: by Loki (RE2 with `(?i)`) for the counts and by a Grafana table value mapping (a JavaScript regex, no inline flags) for the highlight, so patterns are limited to the common subset and case-folded as `[xX]` for the browser. The tiles use `count_over_time(... [$__range]) or vector(0)`; because Grafana renders `$__range` in whole seconds, a window starting exactly at arming dropped lines logged in its first second on alternate refreshes (found by AC-LOGX), so the window starts one second before arming. The time is written as RFC 3339: Grafana's time picker shows an epoch-millisecond string as "Invalid date". |
+| DEC-032 | Expectations become watches: expected messages are `info` (notify, never block), forbidden ones `alert`. Arming and clearing leave breach state to the monitor, as `remove_watch` does (DEC-022), so a cleared forbidden message returns the pane to idle. A panel with no data keeps its watch's state: a transient failed query had made a seen message clear and notify again. |
 
 ## 13. Open questions and risks
 
@@ -350,6 +386,7 @@ Crates:
 | OQ-006 | CloudWatch Live Tail and Loki tail are not Grafana-native streams; panels refresh on an interval instead. |
 | OQ-007 | Resolved: terminal-browser refuses root and needs a kitty-graphics terminal; CI runs it as the non-root runner inside `scripts/e2e/kitty_term.py`, which answers the graphics probe and counts frames. Real terminals (Ghostty, kitty, WezTerm, iTerm2) remain subject to OQ-001. |
 | OQ-008 | Publishing to npm needs the `NPM_TOKEN` repository secret. Until it is set, Publish to npm fails with a message saying so and installs use the GitHub release. |
+| OQ-009 | The OpenTelemetry image is large (about 0.9 GB to download, 3.6 GB unpacked), so the first OpenTelemetry pane waits for the pull; later ones start in seconds. Tempo makes a trace searchable 10-20 s after its last span, so a trace table is empty right after a run. |
 
 ## 14. Delivery ledger
 
@@ -365,6 +402,7 @@ Crates:
 | 2026-09-26 | v0.2.0: dashboard-building agent skill (loop, privacy rules, dashboard JSON, per-datasource query models, recipes), installed by the plugin build step and refreshed by the pane, served as MCP resources; examples validated by tests and on a real Grafana. | SKILL-001..004 |
 | 2026-09-26 | npm distribution ported from herdr-remote-channel: `herdr-dashr` and four platform packages, verified packaging, publish workflow after Release; `install.sh` prefers npm and falls back to the GitHub release. | TECH-005, HERDR-006 |
 | 2026-09-26 | Publish to npm takes its packaging tools from the workflow commit and the version from the released commit, so tags cut before the tools (v0.2.0) can be published; the first dry run had checked out the tag and found no packaging script. `setup-node` moved off the deprecated Node 20 runtime. | none (fix to TECH-005 pipeline) |
+| 2026-09-26 | v0.3.0: OpenTelemetry mode — one `grafana/otel-lgtm` container per pane with an OTLP endpoint, announced to the human and the agent — plus `dashr tail`, and live log checks: expectation tiles and a highlighted live log trail on top of the dashboard, notifications as messages arrive, a counts-only verdict (`expect_logs`, `log_expectations`, `clear_log_expectations`, `session_info`, `dashr expect`). Watches gain a severity and hold their state through a panel with no data. Skill reference for OTel data and log checks. | OTEL-001..005, LOGX-001..005, ALERT-005, SKILL-005 |
 
 ### Requirement completion summary
 
@@ -378,12 +416,14 @@ Crates:
 | MCP | 10 | 10 | 0 | 0 |
 | PRIV | 7 | 7 | 0 | 0 |
 | AWS | 6 | 6 | 0 | 0 |
-| ALERT | 4 | 4 | 0 | 0 |
+| ALERT | 5 | 5 | 0 | 0 |
 | PROMO | 3 | 3 | 0 | 0 |
-| SKILL | 4 | 4 | 0 | 0 |
+| SKILL | 5 | 5 | 0 | 0 |
+| OTEL | 5 | 5 | 0 | 0 |
+| LOGX | 5 | 5 | 0 | 0 |
 | GOV/TECH | 8 | 7 | 1 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 80 | 79 | 1 | 0 |
+| **All** | 92 | 91 | 1 | 0 |
 
 ## 15. Acceptance criteria
 
@@ -395,3 +435,11 @@ Crates:
   personal fields.
 - **AC-PIPELINE** A CodePipeline URL yields the proposed dashboard.
 - **AC-ALERT** A breached watch marks the pane blocked and notifies once.
+- **AC-OTEL** The OpenTelemetry action yields one hardened container with
+  Grafana and OTLP on loopback, the endpoint shown in the text view and set
+  in the chat pane, and OTLP logs, traces and metrics queryable (masked)
+  through the agent's tools.
+- **AC-LOGX** Armed expectations start waiting; lines shipped with
+  `dashr tail` turn expected ones seen and the verdict passed; a forbidden
+  line turns its tile red, fails the verdict and blocks the pane; the verdict
+  never carries a line; clearing restores the dashboard and unblocks the pane.

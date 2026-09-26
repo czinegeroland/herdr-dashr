@@ -12,6 +12,8 @@ use crate::Result;
 
 /// Environment passed to the dashboard pane by the `pipeline` action.
 pub const PIPELINE_ENV: &str = "DASHR_PIPELINE_URL";
+/// Set to `1` by the `otel` action: the pane starts in OpenTelemetry mode.
+pub const OTEL_ENV: &str = "DASHR_OTEL";
 /// Working directory for the chat pane, from the invoking context.
 pub const ORIGIN_CWD_ENV: &str = "DASHR_ORIGIN_CWD";
 
@@ -19,8 +21,16 @@ pub fn load_config(paths: &Paths) -> Result<Config> {
     Config::load_from_dir(&paths.config_dir).map_err(|error| error.to_string())
 }
 
-fn open_dashboard(env: &PluginEnv, herdr: &Herdr, pipeline: Option<&str>) -> Result<()> {
+fn open_dashboard(
+    env: &PluginEnv,
+    herdr: &Herdr,
+    pipeline: Option<&str>,
+    otel: bool,
+) -> Result<()> {
     let mut pane_env = Vec::new();
+    if otel {
+        pane_env.push((OTEL_ENV.to_owned(), "1".to_owned()));
+    }
     if let Some(cwd) = env.focused_cwd() {
         pane_env.push((ORIGIN_CWD_ENV.to_owned(), cwd));
     }
@@ -51,7 +61,8 @@ pub fn action(paths: &Paths, id: &str) -> Result<()> {
     let env = PluginEnv::from_process();
     let herdr = Herdr::new(&env.herdr_bin());
     match id {
-        "open" => open_dashboard(&env, &herdr, None),
+        "open" => open_dashboard(&env, &herdr, None, false),
+        "otel" => open_dashboard(&env, &herdr, None, true),
         "pipeline" => match env.clicked_url.as_deref() {
             Some(url) => {
                 // Refuse early, in a notification, rather than in a pane that
@@ -60,7 +71,7 @@ pub fn action(paths: &Paths, id: &str) -> Result<()> {
                     let _ = herdr.notify("dashr", Some(&error.to_string()), false);
                     return Err(error.to_string());
                 }
-                open_dashboard(&env, &herdr, Some(url))
+                open_dashboard(&env, &herdr, Some(url), false)
             }
             None => {
                 let message = "Ctrl-click a CodePipeline console URL to open its dashboard";

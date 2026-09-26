@@ -399,9 +399,71 @@ pub fn welcome(title: &str, note: &str) -> Value {
     })
 }
 
+/// The first dashboard of an OpenTelemetry session: where to send data, a
+/// live trail of every log line and the latest traces (DASHR-OTEL-005).
+pub fn otel_welcome(http_endpoint: &str, grpc_endpoint: &str) -> Value {
+    let note = format!(
+        "**OpenTelemetry endpoint of this pane** — nothing is stored; it stops when the pane closes.\n\n\
+         `OTEL_EXPORTER_OTLP_ENDPOINT={http_endpoint}` (OTLP/HTTP) · gRPC `{grpc_endpoint}`\n\n\
+         Ship any command's output: `dashr tail -- <command>` · Ask the agent below to watch for the log messages you expect."
+    );
+    let loki = json!({"type": "loki", "uid": "loki"});
+    let tempo = json!({"type": "tempo", "uid": "tempo"});
+    json!({
+        "title": "OpenTelemetry",
+        "time": {"from": "now-15m", "to": "now"},
+        "panels": [
+            {
+                "id": 1,
+                "type": "text",
+                "title": "herdr-dashr",
+                "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+                "options": {"mode": "markdown", "content": note}
+            },
+            {
+                "id": 2,
+                "type": "logs",
+                "title": "Logs (all services)",
+                "gridPos": {"x": 0, "y": 4, "w": 24, "h": 14},
+                "datasource": loki,
+                "targets": [{"refId": "A", "datasource": loki,
+                             "expr": crate::logx::DEFAULT_SELECTOR, "queryType": "range"}],
+                "options": {"showTime": true, "sortOrder": "Descending", "wrapLogMessage": true,
+                            "enableLogDetails": true, "dedupStrategy": "none"}
+            },
+            {
+                "id": 3,
+                "type": "table",
+                "title": "Recent traces",
+                "gridPos": {"x": 0, "y": 18, "w": 24, "h": 8},
+                "datasource": tempo,
+                "targets": [{"refId": "A", "datasource": tempo, "queryType": "traceql",
+                             "query": "{}", "limit": 20, "tableType": "traces"}]
+            }
+        ]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn otel_welcome_validates_against_the_otel_datasources() {
+        let known = vec![
+            "dashr-testdata".to_owned(),
+            "loki".to_owned(),
+            "tempo".to_owned(),
+        ];
+        let welcome = otel_welcome("http://127.0.0.1:4318", "http://127.0.0.1:4317");
+        let normalized = normalize(&welcome, &pins(&known)).unwrap();
+        assert!(normalized.warnings.is_empty(), "{:?}", normalized.warnings);
+        assert!(
+            welcome
+                .to_string()
+                .contains("OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318")
+        );
+    }
 
     fn known() -> Vec<String> {
         vec!["dashr-testdata".to_owned(), "prom".to_owned()]
