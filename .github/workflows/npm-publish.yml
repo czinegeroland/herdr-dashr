@@ -45,13 +45,15 @@ jobs:
        (github.event.workflow_run.head_branch == 'main' ||
         startsWith(github.event.workflow_run.head_branch, 'v')))
     steps:
-      - name: Check out the released commit
+      # The packaging tools come from this workflow's own commit, so a tag cut
+      # before them can still be published; the version comes from the
+      # released commit (below). Full history, for `git show <ref>:...`.
+      - name: Check out the packaging tools
         uses: actions/checkout@v7
         with:
-          # For a dispatch, the tag; for a Release run, the commit it built.
-          ref: ${{ inputs.tag || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22.x'
           registry-url: https://registry.npmjs.org
@@ -60,11 +62,14 @@ jobs:
         id: release
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          RELEASED_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           set -euo pipefail
-          # A Release run releases the manifest version at its commit.
-          manifest="v$(sed -n 's/^version = "\(.*\)"$/\1/p' herdr-plugin.toml | head -n 1)"
+          # A dispatch names the tag; a Release run released the manifest
+          # version at the commit it built.
+          ref="${INPUT_TAG:-$RELEASED_SHA}"
+          manifest="v$(git show "$ref:herdr-plugin.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)"
           tag="${INPUT_TAG:-$manifest}"
           [ "$tag" = "$manifest" ] || { echo "tag $tag does not match manifest $manifest at that ref" >&2; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

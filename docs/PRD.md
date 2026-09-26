@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.2.0 |
 | Delivery phase | v0.2.0 - agent skill |
-| Last updated | 2026-09-26T06:30:00Z |
+| Last updated | 2026-09-26T08:45:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -364,6 +364,7 @@ Crates:
 | 2026-09-26 | Browser pane verified end to end: a pty that answers kitty graphics queries lets CI run terminal-browser against the real Grafana. Reload and screenshot moved to direct CDP (DEC-024); fixed the Grafana crash under the C locale (DEC-025) and per-user runtime dirs (DEC-026). | VIEW-001/002/004, MCP-010, GRAF-004, SEC-005 |
 | 2026-09-26 | v0.2.0: dashboard-building agent skill (loop, privacy rules, dashboard JSON, per-datasource query models, recipes), installed by the plugin build step and refreshed by the pane, served as MCP resources; examples validated by tests and on a real Grafana. | SKILL-001..004 |
 | 2026-09-26 | npm distribution ported from herdr-remote-channel: `herdr-dashr` and four platform packages, verified packaging, publish workflow after Release; `install.sh` prefers npm and falls back to the GitHub release. | TECH-005, HERDR-006 |
+| 2026-09-26 | Publish to npm takes its packaging tools from the workflow commit and the version from the released commit, so tags cut before the tools (v0.2.0) can be published; the first dry run had checked out the tag and found no packaging script. `setup-node` moved off the deprecated Node 20 runtime. | none (fix to TECH-005 pipeline) |
 
 ### Requirement completion summary
 
