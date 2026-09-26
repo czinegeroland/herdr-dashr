@@ -430,6 +430,7 @@ Crates:
 | 2026-09-27 | Windows support, installed as herdr-remote-channel installs (DEC-038): npm build step and `node` launcher on every platform, a Windows release target and npm package, PowerShell quoting for the chat pane, Windows unit tests in CI, and `.gitattributes` keeping LF on Windows checkouts (the manifest test compares bytes). Version 0.1.1. | HERDR-006, HERDR-008, TECH-004, TECH-005 |
 | 2026-09-27 | npm publish retries survive registry lag: a version the registry refuses as already published counts as published, so re-running a half-finished publish completes it. | TECH-005 |
 | 2026-09-27 | A chat pane that fails to open, or whose id fails to save, is reported on the text view: the view clears the screen, which had hidden the reason when AC-OPEN intermittently found no chat pane. | HERDR-002 |
+| 2026-09-27 | The fake-CLI unit tests create their scripts with `cp`, so a write handle can no longer leak into a parallel test's fork and fail the run with ETXTBSY ("Text file busy"), as it did on Linux CI. | none (test robustness) |
 
 ### Requirement completion summary
 
