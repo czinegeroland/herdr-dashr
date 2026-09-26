@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T00:30:00Z |
+| Last updated | 2026-09-27T01:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -155,7 +155,7 @@ Crates:
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
 | DASHR-HERDR-001 | `herdr-plugin.toml` is generated from code and a test fails when the checked-in file differs. | Must | Verified | `crates/dashr-cli/tests/plugin_manifest.rs` |
-| DASHR-HERDR-002 | Action `open` opens a new tab: dashboard pane on top, chat pane split below. | Must | Verified | AC-OPEN in `scripts/e2e/run.sh` |
+| DASHR-HERDR-002 | Action `open` opens a new tab: dashboard pane on top, chat pane split below; if the chat pane cannot be opened or recorded, the text view says why. | Must | Verified | AC-OPEN in `scripts/e2e/run.sh` |
 | DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Verified | AC-PIPELINE in `scripts/e2e/run.sh`; `link_pattern_matches_both_consoles` |
 | DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Verified | Startup reaper scenario in `scripts/e2e/run.sh` |
 | DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
@@ -272,7 +272,7 @@ Crates:
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
 | DASHR-TECH-004 | Releases publish Linux, macOS and Windows binaries with SHA-256 checksums (`.tar.gz`, `.zip` for Windows). | Must | Implemented | `.github/workflows/release.yml`: 5 targets including `x86_64-pc-windows-msvc`; `release_packaging_shim_and_installer_list_the_same_platforms`; v0.1.1 pending |
-| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (five, with `herdr-dashr-win32-x64`) (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | v0.1.0 published with four platform packages by `.github/workflows/npm-publish.yml`; `scripts/build-npm-packages.mjs` now packs the Windows `.zip` as `herdr-dashr-win32-x64`; `crates/dashr-cli/tests/distribution.rs`; v0.1.1 with five packages pending |
+| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (five, with `herdr-dashr-win32-x64`) (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | v0.1.0 published with four platform packages by `.github/workflows/npm-publish.yml`; `scripts/build-npm-packages.mjs` now packs the Windows `.zip` as `herdr-dashr-win32-x64`; `crates/dashr-cli/tests/distribution.rs`; v0.1.1: the Linux and macOS packages were accepted, but npm refused the new name `herdr-dashr-win32-x64` ("Package name triggered spam detection"), so `herdr-dashr` 0.1.1 is not published yet; a re-run now tolerates registry lag |
 
 ### 8.12 Agent skill (SKILL)
 
@@ -428,6 +428,9 @@ Crates:
 | 2026-09-26 | v0.1.0 released on GitHub (4 checksummed archives). Publish to npm was refused (E404 for a new package: the token may not create packages); it now checks the token first and fails fast on permission errors. The dashboard pane retries opening the chat pane for a few seconds (twice, on the first open after a fresh Herdr server, the split was refused and the agent never started), and the e2e suite prints the pane when that check fails. | TECH-005 |
 | 2026-09-26 | v0.1.0 published to npm (`herdr-dashr` + four platform packages); `npx herdr-dashr@0.1.0` runs the release binary. Every PRD requirement is Verified. | TECH-005 |
 | 2026-09-27 | Windows support, installed as herdr-remote-channel installs (DEC-038): npm build step and `node` launcher on every platform, a Windows release target and npm package, PowerShell quoting for the chat pane, Windows unit tests in CI, and `.gitattributes` keeping LF on Windows checkouts (the manifest test compares bytes). Version 0.1.1. | HERDR-006, HERDR-008, TECH-004, TECH-005 |
+| 2026-09-27 | npm publish retries survive registry lag: a version the registry refuses as already published counts as published, so re-running a half-finished publish completes it. | TECH-005 |
+| 2026-09-27 | A chat pane that fails to open, or whose id fails to save, is reported on the text view: the view clears the screen, which had hidden the reason when AC-OPEN intermittently found no chat pane. | HERDR-002 |
+| 2026-09-27 | The fake-CLI unit tests create their scripts with `cp`, so a write handle can no longer leak into a parallel test's fork and fail the run with ETXTBSY ("Text file busy"), as it did on Linux CI. | none (test robustness) |
 
 ### Requirement completion summary
 

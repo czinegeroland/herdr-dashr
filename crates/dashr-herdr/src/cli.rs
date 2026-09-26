@@ -415,12 +415,20 @@ mod tests {
         // `sh -c` stands in for herdr: prints an error envelope, exits 1.
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("fake-herdr");
+        // Copied into place by `cp` so no write handle to the executable is
+        // ever open here to leak into a parallel test's fork (ETXTBSY).
+        let source = dir.path().join("fake-herdr.sh");
         std::fs::write(
-            &script,
+            &source,
             "#!/bin/sh\necho '{\"id\":\"x\",\"error\":{\"code\":\"pane_not_found\",\"message\":\"pane w9:p9 not found\"}}'\nexit 1\n",
         )
         .unwrap();
-        #[cfg(unix)]
+        let copied = std::process::Command::new("cp")
+            .arg(&source)
+            .arg(&script)
+            .status()
+            .unwrap();
+        assert!(copied.success());
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();

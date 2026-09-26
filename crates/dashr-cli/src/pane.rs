@@ -319,7 +319,9 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         }
     }
 
-    // Chat pane.
+    // Chat pane. A failure is kept for the text view, which clears the
+    // screen and would otherwise hide it.
+    let mut chat_note = String::new();
     if config.agent.enabled && !stop.load(Ordering::SeqCst) {
         let exe = std::env::current_exe().map_err(|error| error.to_string())?;
         let mcp_path = record.runtime_dir.join("mcp.json");
@@ -389,9 +391,14 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
                     println!("dashr: could not start the agent: {error}");
                 }
                 record.chat_pane = Some(chat);
-                let _ = store.save(&record);
+                if let Err(error) = store.save(&record) {
+                    chat_note = format!("Chat pane not recorded: {error}");
+                }
             }
-            Err(error) => println!("dashr: could not open the chat pane: {error}"),
+            Err(error) => {
+                println!("dashr: could not open the chat pane: {error}");
+                chat_note = format!("Chat pane not opened: {error}");
+            }
         }
     }
     let _ = herdr.report_agent(&pane_id, AgentState::Idle, None);
@@ -450,6 +457,13 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         }
     } else if config.browser.enabled {
         note = "terminal-browser is not installed (https://github.com/zenbu-labs/terminal-browser); text view.".into();
+    }
+    if !chat_note.is_empty() {
+        note = if note.is_empty() {
+            chat_note
+        } else {
+            format!("{chat_note}\n{note}")
+        };
     }
     while !stop.load(Ordering::SeqCst) {
         let tick = latest.lock().ok().and_then(|slot| slot.clone());

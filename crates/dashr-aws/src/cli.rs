@@ -216,8 +216,12 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("aws");
+        // Written as a plain file and copied into place by `cp`: a write
+        // handle held here could leak into a parallel test's fork and make
+        // running the script fail with ETXTBSY.
+        let source = dir.path().join("aws.sh");
         std::fs::write(
-            &script,
+            &source,
             r#"#!/bin/sh
 case "$1 $2" in
   "codepipeline get-pipeline")
@@ -235,6 +239,12 @@ esac
 "#,
         )
         .unwrap();
+        let copied = std::process::Command::new("cp")
+            .arg(&source)
+            .arg(&script)
+            .status()
+            .unwrap();
+        assert!(copied.success());
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let cli = AwsCli::new(script.to_str().unwrap(), None);
         let pipeline = PipelineRef {
