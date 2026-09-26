@@ -4,8 +4,10 @@
 Usage: mcp_client.py <dashr> <state-dir> <config-dir> <session> <script.json>
 
 The script is a JSON list of {"tool": name, "arguments": {...}}. Each
-result is printed as one JSON line: {"tool", "isError", "text"}.
+result is printed as one JSON line: {"tool", "isError", "text"}. Image
+results are saved beside the script as <script>.<tool>.<n>.png.
 """
+import base64
 import json
 import subprocess
 import sys
@@ -50,6 +52,12 @@ def main() -> int:
     for step in script:
         result = request("tools/call", {"name": step["tool"], "arguments": step.get("arguments", {})})
         text = "".join(item.get("text", "") for item in result["content"] if item["type"] == "text")
+        images = [item for item in result["content"] if item["type"] == "image"]
+        for number, image in enumerate(images):
+            path = f"{script_path}.{step['tool']}.{number}.png"
+            with open(path, "wb") as handle:
+                handle.write(base64.b64decode(image["data"]))
+            text += f"[image {image['mimeType']} saved to {path}]"
         print(json.dumps({"tool": step["tool"], "isError": result.get("isError", False), "text": text}))
     process.stdin.close()
     process.wait(timeout=10)

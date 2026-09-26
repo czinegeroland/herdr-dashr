@@ -2,7 +2,8 @@ name: End to end
 
 # DASHR-TECH-003: a real Herdr server, the plugin linked from this checkout,
 # a real Grafana container, and the MCP server driven over stdio
-# (scripts/e2e/run.sh). Linux only: GitHub's macOS runners have no Docker.
+# (scripts/e2e/run.sh), and terminal-browser showing the real Grafana.
+# Linux only: GitHub's macOS runners have no Docker.
 on:
   push:
     branches: [main]
@@ -30,4 +31,16 @@ jobs:
           shared-key: e2e
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --locked --bin dashr
+      # The browser scenario (DASHR-VIEW-*): terminal-browser renders the
+      # real Grafana into a pty that answers kitty graphics queries
+      # (scripts/e2e/kitty_term.py). Chromium's sandbox needs unprivileged
+      # user namespaces, which Ubuntu 24.04 restricts by default.
+      - name: Install terminal-browser
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          curl -fsSL https://terminal-browser.sh/install | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          python3 -m pip install --user websocket-client
       - run: scripts/e2e/run.sh target/debug/dashr
+        env:
+          DASHR_E2E_BROWSER: "1"

@@ -47,28 +47,74 @@ impl Paths {
     }
 }
 
-/// Candidate memory-backed bases, best first.
-pub fn runtime_bases() -> Vec<(PathBuf, bool)> {
+/// A place runtime directories can go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeBase {
+    pub path: PathBuf,
+    pub in_memory: bool,
+    /// Shared with other users of the machine.
+    pub shared: bool,
+}
+
+/// Candidate bases, best first: memory-backed and private, memory-backed
+/// and shared, then the temp directory.
+pub fn runtime_bases() -> Vec<RuntimeBase> {
     let mut bases = Vec::new();
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
-        bases.push((PathBuf::from(dir), true));
+        bases.push(RuntimeBase {
+            path: PathBuf::from(dir),
+            in_memory: true,
+            shared: false,
+        });
     }
     if Path::new("/dev/shm").is_dir() {
-        bases.push((PathBuf::from("/dev/shm"), true));
+        bases.push(RuntimeBase {
+            path: PathBuf::from("/dev/shm"),
+            in_memory: true,
+            shared: true,
+        });
     }
     // macOS has no user tmpfs; its per-user temp directory is private to the
     // user but disk-backed. Recorded as a known limitation (OQ-002).
-    bases.push((std::env::temp_dir(), false));
+    bases.push(RuntimeBase {
+        path: std::env::temp_dir(),
+        in_memory: false,
+        shared: true,
+    });
     bases
 }
 
-/// Creates `<base>/herdr-dashr/<session>` with mode 0700 and says whether
+/// The directory name under a base.
+///
+/// `/dev/shm` and `/tmp` are shared by every user on the machine; the
+/// first user to create a plain `herdr-dashr` there makes it 0700 and locks
+/// everyone else out, pushing them to a disk-backed fallback (found by the
+/// end-to-end suite running as a second user). Under a shared base the name
+/// carries the user. `XDG_RUNTIME_DIR` is already per-user.
+fn base_name(shared: bool) -> String {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .map(|user| dashr_core::ids::sanitize(&user))
+        .unwrap_or_default();
+    if shared && !user.is_empty() {
+        format!("herdr-dashr-{user}")
+    } else {
+        "herdr-dashr".to_owned()
+    }
+}
+
+/// Creates `<base>/herdr-dashr[-<user>]/<session>` with mode 0700 and says whether
 /// it is memory-backed.
 pub fn create_runtime_dir(session_id: &str) -> std::io::Result<(PathBuf, bool)> {
     let mut last_error = None;
-    for (base, in_memory) in runtime_bases() {
+    for RuntimeBase {
+        path: base,
+        in_memory,
+        shared,
+    } in runtime_bases()
+    {
         let dir = base
-            .join("herdr-dashr")
+            .join(base_name(shared))
             .join(dashr_core::ids::sanitize(session_id));
         match create_private(&dir) {
             Ok(()) => return Ok((dir, in_memory)),
@@ -96,7 +142,8 @@ pub fn remove_runtime_dir(dir: &Path) {
     let inside = dir
         .parent()
         .and_then(Path::file_name)
-        .is_some_and(|name| name == "herdr-dashr");
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "herdr-dashr" || name.starts_with("herdr-dashr-"));
     if inside {
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -116,7 +163,16 @@ mod tests {
     #[test]
     fn runtime_dir_is_private_and_removable() {
         let (dir, _) = create_runtime_dir("test-session-xyz").unwrap();
-        assert!(dir.ends_with("herdr-dashr/test-session-xyz"));
+        assert!(dir.ends_with("test-session-xyz"));
+        let parent = dir
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(parent.starts_with("herdr-dashr"), "{parent}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -125,6 +181,18 @@ mod tests {
         }
         remove_runtime_dir(&dir);
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn shared_bases_get_a_per_user_name() {
+        // USER is set in every environment the suite runs in.
+        if let Ok(user) = std::env::var("USER") {
+            assert_eq!(
+                base_name(true),
+                format!("herdr-dashr-{}", dashr_core::ids::sanitize(&user))
+            );
+        }
+        assert_eq!(base_name(false), "herdr-dashr");
     }
 
     #[test]

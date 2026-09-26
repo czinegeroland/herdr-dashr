@@ -304,7 +304,7 @@ assert result["inventory"]["resources"]["lambdas"] == ["api-handler"]
 EOF2
 ok "open_for_pipeline re-inspects and applies in place"
 herdr pane close "$PANE" >/dev/null
-wait_for 30 "! docker ps --filter label=herdr.dashr=1 -q | grep -q ." || fail "pipeline container still running"
+wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$PSESSION" || fail "pipeline container still running"
 
 log "startup reaper"
 HASH="$(basename "$RECORD" | cut -d- -f1)"
@@ -325,6 +325,9 @@ grep -q 'docker' "$WORK/doctor.out" && grep -q 'terminal-browser' "$WORK/doctor.
 ok "doctor passes required checks and reports optional ones"
 
 log "custom image with Infinity and Zabbix"
+if [ "${DASHR_E2E_SKIP_IMAGE:-}" = 1 ]; then
+  echo "  skipped: DASHR_E2E_SKIP_IMAGE=1 (the image build needs grafana.com)"
+else
 "$ROOT/bin/dashr" image build --tag herdr-dashr-grafana:e2e >"$WORK/image.log" 2>&1 || { tail -30 "$WORK/image.log"; fail "image build failed"; }
 STANDALONE_STATE="$WORK/standalone-state"; STANDALONE_CONFIG="$WORK/standalone-config"
 mkdir -p "$STANDALONE_CONFIG"
@@ -346,5 +349,88 @@ curl -fsS "http://127.0.0.1:$IPORT/api/datasources/uid/seq" | grep -q '"type":"y
   || fail "Seq datasource not provisioned through Infinity"
 "$ROOT/bin/dashr" --state-dir "$STANDALONE_STATE" --config-dir "$STANDALONE_CONFIG" session stop local-image >/dev/null
 ok "custom image loads Infinity from outside the tmpfs; Seq provisioned through it"
+fi
+
+log "browser pane: terminal-browser in a kitty-graphics terminal"
+if ! command -v terminal-browser >/dev/null || [ "$(id -u)" = 0 ]; then
+  [ "${DASHR_E2E_BROWSER:-}" = 1 ] && fail "terminal-browser scenario required but terminal-browser is missing or running as root"
+  echo "  skipped: needs terminal-browser and a non-root user (set DASHR_E2E_BROWSER=1 to require it)"
+else
+  SOCK="$HOME/.config/herdr/sessions/$HERDR_SESSION/herdr.sock"
+  ROOT_PANE="$(herdr pane list | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["panes"][0]["pane_id"])')"
+  BPANE="$(herdr pane split "$ROOT_PANE" --direction right --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
+  BCONF="$WORK/browser-config"
+  mkdir -p "$BCONF"
+  cat >"$BCONF/dashr.toml" <<EOF2
+[agent]
+enabled = false
+
+[monitor]
+interval_secs = 2
+EOF2
+  # The real pane process, in a terminal that answers kitty graphics queries.
+  # LANG is left unset on purpose: dashr must supply a usable browser locale.
+  env -u LANG -u LC_ALL HERDR_PANE_ID="$BPANE" HERDR_SOCKET_PATH="$SOCK" HERDR_BIN_PATH="$(command -v herdr)" \
+    python3 "$ROOT/scripts/e2e/kitty_term.py" "$WORK/term.json" 0 -- \
+    "$ROOT/bin/dashr" --config-dir "$BCONF" --state-dir "$STATE_DIR" herdr pane dashboard &
+  TERM_PID=$!
+  wait_for 90 "grep -l '\"pane_id\": \"$BPANE\"' $STATE_DIR/sessions/*.json" || fail "browser pane session did not start"
+  BRECORD="$(grep -l "\"pane_id\": \"$BPANE\"" "$STATE_DIR"/sessions/*.json | head -n 1)"
+  BSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$BRECORD")"
+  BUID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dashboard_uid"])' "$BRECORD")"
+  BRUNTIME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_dir"])' "$BRECORD")"
+  wait_for 60 "terminal-browser ls --all --json | grep -q '/d/$BUID'" || fail "terminal-browser is not showing the dashboard"
+  CDP="$(terminal-browser ls --all --json | python3 -c 'import json,sys; b=[b for b in json.load(sys.stdin)["browsers"] if any("/d/'"$BUID"'" in t["url"] for t in b["tabs"])]; print(b[0]["cdpPort"])')"
+  ok "terminal-browser opened the kiosk URL for $BUID"
+  [ -d "$BRUNTIME/browser" ] || fail "browser profile is not in the session runtime dir"
+  case "$BRUNTIME" in
+    /dev/shm/* | "${XDG_RUNTIME_DIR:-/nonexistent}"/*) ;;
+    *) [ "$(uname -s)" = Linux ] && fail "runtime dir $BRUNTIME is not memory-backed" ;;
+  esac
+  ok "browser profile lives in the session runtime dir ($BRUNTIME/browser)"
+  wait_for 60 "python3 $ROOT/scripts/e2e/cdp_eval.py $CDP /d/$BUID 'document.body.innerText' | grep -q 'Heartbeat (TestData)'" \
+    || { python3 "$ROOT/scripts/e2e/cdp_eval.py" "$CDP" "/d/$BUID" 'document.body.innerText' | head -5; fail "Grafana did not render the dashboard"; }
+  python3 "$ROOT/scripts/e2e/cdp_eval.py" "$CDP" "/d/$BUID" 'document.body.innerText' | grep -q 'unexpected error' && fail "Grafana shows an error page"
+  ok "Grafana rendered the welcome dashboard in the browser pane"
+
+  mkdir -p "$WORK/browser"
+  cat >"$WORK/browser/script.json" <<'EOF2'
+[
+  {"tool": "apply_dashboard", "arguments": {"dashboard": {"title": "browser check", "panels": [
+    {"id": 1, "type": "timeseries", "title": "Reloaded panel", "datasource": {"uid": "dashr-testdata"},
+     "targets": [{"refId": "A", "scenarioId": "random_walk"}]}]}}},
+  {"tool": "screenshot"}
+]
+EOF2
+  python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$BCONF" "$BSESSION" "$WORK/browser/script.json" >"$WORK/browser/mcp.out"
+  python3 - "$WORK/browser/mcp.out" <<'EOF2' || fail "browser MCP assertions failed"
+import json, sys
+by = {json.loads(l)["tool"]: json.loads(l) for l in open(sys.argv[1])}
+applied = json.loads(by["apply_dashboard"]["text"])
+assert applied["browser_reloaded"] is True, applied
+assert not by["screenshot"]["isError"], by["screenshot"]["text"]
+assert "saved to" in by["screenshot"]["text"], by["screenshot"]["text"]
+EOF2
+  wait_for 30 "python3 $ROOT/scripts/e2e/cdp_eval.py $CDP /d/$BUID 'document.body.innerText' | grep -q 'Reloaded panel'" \
+    || fail "the browser did not reload into the new dashboard"
+  ok "apply_dashboard reloaded the browser into the new dashboard"
+  SHOT="$WORK/browser/script.json.screenshot.0.png"
+  python3 - "$SHOT" <<'EOF2' || fail "screenshot is not a real PNG"
+import sys
+data = open(sys.argv[1], "rb").read()
+assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+assert len(data) > 5000, f"only {len(data)} bytes"
+EOF2
+  ok "screenshot tool returned a $(wc -c <"$SHOT") byte PNG of a non-personal dashboard"
+
+  kill -TERM "$TERM_PID"
+  wait "$TERM_PID" || true
+  wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$BSESSION" || fail "browser pane container still running"
+  [ ! -e "$BRUNTIME" ] || fail "runtime dir (with the browser profile) left behind"
+  [ ! -e "$BRECORD" ] || fail "browser pane session record left behind"
+  python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["frames"] > 0 and r["graphics_queries"] > 0, r' "$WORK/term.json" \
+    || fail "terminal-browser drew no kitty graphics frames"
+  ok "closing the terminal stopped Grafana and deleted the browser profile; $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["frames"])' "$WORK/term.json") frames were drawn"
+fi
 
 log "all $PASS checks passed"

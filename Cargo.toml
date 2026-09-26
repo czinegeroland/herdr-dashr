@@ -37,7 +37,8 @@ thiserror = "2"
 # remote one. An async runtime would buy nothing here (decision DEC-007).
 ureq = { version = "3", features = ["json"] }
 signal-hook = "0.4"
-base64 = "0.23"
+# Drives terminal-browser's Chromium over the DevTools protocol (DEC-024).
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 tempfile = "3"
 
 [workspace.lints.rust]
