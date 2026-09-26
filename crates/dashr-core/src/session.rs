@@ -35,7 +35,28 @@ pub struct SessionRecord {
     /// The CodePipeline this session was opened for.
     #[serde(default)]
     pub pipeline: Option<String>,
+    /// Loopback OTLP ports, when the session runs the OpenTelemetry image.
+    #[serde(default)]
+    pub otlp: Option<Otlp>,
     pub started_unix: u64,
+}
+
+/// Where a session receives OpenTelemetry data.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Otlp {
+    pub grpc_port: u16,
+    pub http_port: u16,
+}
+
+impl Otlp {
+    /// The value for `OTEL_EXPORTER_OTLP_ENDPOINT` (OTLP/HTTP).
+    pub fn http_endpoint(&self) -> String {
+        format!("http://127.0.0.1:{}", self.http_port)
+    }
+
+    pub fn grpc_endpoint(&self) -> String {
+        format!("http://127.0.0.1:{}", self.grpc_port)
+    }
 }
 
 impl SessionRecord {
@@ -117,6 +138,11 @@ impl SessionStore {
             .join(format!("{}.watches.json", crate::ids::sanitize(session_id)))
     }
 
+    fn logx_path(&self, session_id: &str) -> PathBuf {
+        self.dir
+            .join(format!("{}.logx.json", crate::ids::sanitize(session_id)))
+    }
+
     fn io(path: &Path) -> impl FnOnce(std::io::Error) -> SessionError + '_ {
         move |source| SessionError::Io {
             path: path.display().to_string(),
@@ -166,6 +192,7 @@ impl SessionStore {
             .filter(|path| {
                 path.extension().is_some_and(|ext| ext == "json")
                     && !path.to_string_lossy().ends_with(".watches.json")
+                    && !path.to_string_lossy().ends_with(".logx.json")
             })
             .filter_map(|path| std::fs::read(path).ok())
             .filter_map(|text| serde_json::from_slice(&text).ok())
@@ -185,6 +212,26 @@ impl SessionStore {
     pub fn remove(&self, session_id: &str) {
         let _ = std::fs::remove_file(self.record_path(session_id));
         let _ = std::fs::remove_file(self.watch_path(session_id));
+        let _ = std::fs::remove_file(self.logx_path(session_id));
+    }
+
+    /// The armed log expectations, when there are any.
+    pub fn load_logx(&self, session_id: &str) -> Option<crate::logx::LogxSpec> {
+        std::fs::read(self.logx_path(session_id))
+            .ok()
+            .and_then(|text| serde_json::from_slice(&text).ok())
+    }
+
+    pub fn save_logx(
+        &self,
+        session_id: &str,
+        spec: &crate::logx::LogxSpec,
+    ) -> Result<(), SessionError> {
+        self.write_json(&self.logx_path(session_id), spec)
+    }
+
+    pub fn clear_logx(&self, session_id: &str) {
+        let _ = std::fs::remove_file(self.logx_path(session_id));
     }
 
     pub fn load_watches(&self, session_id: &str) -> WatchState {
@@ -223,6 +270,7 @@ mod tests {
                 allow_fields: vec![],
             }],
             pipeline: None,
+            otlp: None,
             started_unix: 1,
         }
     }
@@ -245,6 +293,7 @@ mod tests {
                         op: Comparison::Gt,
                         threshold: 0.0,
                         label: None,
+                        severity: Default::default(),
                     }],
                     breached: vec![],
                 },

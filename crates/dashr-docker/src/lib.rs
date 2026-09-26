@@ -27,11 +27,38 @@ pub enum DockerError {
     Failed { action: String, message: String },
 }
 
+/// Which image a session runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavor {
+    /// Plain Grafana: datasources only.
+    Grafana,
+    /// `grafana/otel-lgtm`: Grafana plus an OpenTelemetry collector, Loki,
+    /// Tempo and Prometheus in the same container, receiving OTLP on 4317
+    /// (gRPC) and 4318 (HTTP) (requirement DASHR-OTEL-001).
+    OtelLgtm,
+}
+
+/// Where the otel-lgtm image reads Grafana datasource provisioning. dashr's
+/// file is mounted beside the image's own, not over the directory, so the
+/// Loki, Tempo and Prometheus datasources it ships stay provisioned.
+pub const OTEL_PROVISIONING_FILE: &str =
+    "/otel-lgtm/grafana/conf/provisioning/datasources/dashr.yaml";
+
+/// dashr's Tempo configuration for the otel-lgtm image (DEC-033): the
+/// image's own plus the settings that make traces searchable in seconds.
+pub const OTEL_TEMPO_CONFIG: &str = include_str!("../assets/tempo.yaml");
+/// Where the image reads it.
+pub const OTEL_TEMPO_CONFIG_FILE: &str = "/otel-lgtm/tempo-config.yaml";
+/// The file name, in the provisioning directory, that
+/// [`OTEL_TEMPO_CONFIG`] is written to and mounted from.
+pub const TEMPO_CONFIG_NAME: &str = "tempo.yaml";
+
 /// Everything that decides how a session container runs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSpec {
     pub name: String,
     pub image: String,
+    pub flavor: Flavor,
     pub labels: BTreeMap<String, String>,
     pub memory: String,
     pub provisioning_dir: PathBuf,
@@ -61,6 +88,9 @@ impl RunSpec {
             ("GF_USERS_DEFAULT_THEME", "dark"),
             ("GF_LOG_MODE", "console"),
             ("GF_LOG_LEVEL", "warn"),
+            // A live log trail refreshes every second or two; Grafana's
+            // default floor is 5s and it refuses to save faster dashboards.
+            ("GF_DASHBOARDS_MIN_REFRESH_INTERVAL", "1s"),
         ]
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
@@ -80,18 +110,42 @@ impl RunSpec {
             args.push("--label".into());
             args.push(format!("{key}={value}"));
         }
+        // Loopback only, on ports Docker picks.
+        let mut ports = vec!["127.0.0.1::3000"];
+        // Plain Grafana writes nothing outside memory. The OpenTelemetry
+        // components keep logs, traces and metrics on disk instead, in
+        // anonymous volumes that `--rm` deletes with the container, so a
+        // long test session does not eat the memory limit (DEC-033).
+        let (tmpfs, volumes): (&[&str], &[&str]) = match self.flavor {
+            Flavor::Grafana => (
+                &[
+                    "/var/lib/grafana:uid=472,gid=0,mode=0770",
+                    "/tmp",
+                    "/var/log/grafana:uid=472,gid=0",
+                ],
+                &[],
+            ),
+            // Every component writes under /data; Tempo also keeps its
+            // live-store files in /var/tempo.
+            Flavor::OtelLgtm => (&["/tmp"], &["/data", "/var/tempo"]),
+        };
+        if self.flavor == Flavor::OtelLgtm {
+            ports.extend(["127.0.0.1::4317", "127.0.0.1::4318"]);
+        }
+        for port in ports {
+            args.push("-p".into());
+            args.push(port.into());
+        }
+        args.push("--read-only".into());
+        for mount in tmpfs {
+            args.push("--tmpfs".into());
+            args.push((*mount).into());
+        }
+        for target in volumes {
+            args.push("--mount".into());
+            args.push(format!("type=volume,dst={target}"));
+        }
         args.extend([
-            // Loopback only, on a port Docker picks.
-            "-p".into(),
-            "127.0.0.1::3000".into(),
-            // Nothing is written outside memory.
-            "--read-only".into(),
-            "--tmpfs".into(),
-            "/var/lib/grafana:uid=472,gid=0,mode=0770".into(),
-            "--tmpfs".into(),
-            "/tmp".into(),
-            "--tmpfs".into(),
-            "/var/log/grafana:uid=472,gid=0".into(),
             "--log-driver".into(),
             "none".into(),
             "--memory".into(),
@@ -104,16 +158,38 @@ impl RunSpec {
             "--cap-drop".into(),
             "ALL".into(),
             "-v".into(),
-            format!(
-                "{}:/etc/grafana/provisioning:ro",
-                self.provisioning_dir.display()
-            ),
+            match self.flavor {
+                Flavor::Grafana => format!(
+                    "{}:/etc/grafana/provisioning:ro",
+                    self.provisioning_dir.display()
+                ),
+                Flavor::OtelLgtm => format!(
+                    "{}:{OTEL_PROVISIONING_FILE}:ro",
+                    self.provisioning_dir
+                        .join("datasources")
+                        .join("dashr.yaml")
+                        .display()
+                ),
+            },
         ]);
+        if self.flavor == Flavor::OtelLgtm {
+            args.push("-v".into());
+            args.push(format!(
+                "{}:{OTEL_TEMPO_CONFIG_FILE}:ro",
+                self.provisioning_dir.join(TEMPO_CONFIG_NAME).display()
+            ));
+        }
         if self.host_gateway {
             args.push("--add-host".into());
             args.push("host.docker.internal:host-gateway".into());
         }
-        for (key, value) in &self.env {
+        let mut env = self.env.clone();
+        if self.flavor == Flavor::OtelLgtm {
+            // The image preinstalls a plugin from the internet at every start;
+            // a disposable, offline-capable session does not want that.
+            env.insert("GF_PLUGINS_PREINSTALL_DISABLED".into(), "true".into());
+        }
+        for (key, value) in &env {
             args.push("-e".into());
             args.push(format!("{key}={value}"));
         }
@@ -268,9 +344,14 @@ impl Docker {
 
     /// The loopback port Docker mapped to Grafana's 3000.
     pub fn port(&self, name: &str) -> Result<u16, DockerError> {
+        self.mapped_port(name, 3000)
+    }
+
+    /// The loopback port Docker mapped to a container port.
+    pub fn mapped_port(&self, name: &str, container_port: u16) -> Result<u16, DockerError> {
         let output = self.run(
             "port",
-            &["port".into(), name.into(), "3000/tcp".into()],
+            &["port".into(), name.into(), format!("{container_port}/tcp")],
             &BTreeMap::new(),
         )?;
         parse_port(&output).ok_or_else(|| DockerError::Failed {
@@ -369,6 +450,7 @@ mod tests {
         RunSpec {
             name: "herdr-grafana-abc-w1-p1".into(),
             image: "grafana/grafana:12.1.1".into(),
+            flavor: Flavor::Grafana,
             labels,
             memory: "768m".into(),
             provisioning_dir: "/dev/shm/dashr/x/provisioning".into(),
@@ -414,6 +496,49 @@ mod tests {
             "GF_ANALYTICS_REPORTING_ENABLED=false"
         ));
         assert_eq!(args.last().unwrap(), "grafana/grafana:12.1.1");
+    }
+
+    #[test]
+    fn otel_flavor_is_one_hardened_container_receiving_otlp_on_loopback() {
+        let mut otel = spec();
+        otel.flavor = Flavor::OtelLgtm;
+        otel.image = "grafana/otel-lgtm:0.34.0".into();
+        let args = otel.args();
+        assert!(args.contains(&"--read-only".to_owned()));
+        for port in ["127.0.0.1::3000", "127.0.0.1::4317", "127.0.0.1::4318"] {
+            assert!(has_pair(&args, "-p", port), "{port}");
+        }
+        assert!(has_pair(&args, "--tmpfs", "/tmp"));
+        // Telemetry lives on disk in anonymous volumes, deleted with the
+        // container by --rm.
+        assert!(args.contains(&"--rm".to_owned()));
+        for target in ["/data", "/var/tempo"] {
+            assert!(
+                has_pair(&args, "--mount", &format!("type=volume,dst={target}")),
+                "{target}"
+            );
+            assert!(!has_pair(&args, "--tmpfs", target), "{target}");
+        }
+        assert!(has_pair(
+            &args,
+            "-v",
+            &format!("/dev/shm/dashr/x/provisioning/tempo.yaml:{OTEL_TEMPO_CONFIG_FILE}:ro")
+        ));
+        assert!(OTEL_TEMPO_CONFIG.contains("query_end_cutoff: 1s"));
+        assert!(has_pair(
+            &args,
+            "-v",
+            &format!(
+                "/dev/shm/dashr/x/provisioning/datasources/dashr.yaml:{OTEL_PROVISIONING_FILE}:ro"
+            )
+        ));
+        assert!(has_pair(&args, "-e", "GF_PLUGINS_PREINSTALL_DISABLED=true"));
+        assert!(has_pair(&args, "--cap-drop", "ALL"));
+        assert!(has_pair(&args, "--log-driver", "none"));
+        assert!(
+            !has_pair(&spec().args(), "-p", "127.0.0.1::4318"),
+            "plain Grafana stays as it was"
+        );
     }
 
     #[test]

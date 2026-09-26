@@ -6,7 +6,7 @@
 #   scripts/e2e/run.sh [path/to/dashr]
 #
 # Acceptance criteria covered: AC-OPEN, AC-MASK, AC-ALERT, AC-CLOSE,
-# AC-PIPELINE, plus the startup reaper.
+# AC-PIPELINE, AC-OTEL, AC-LOGX, plus the startup reaper.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -47,6 +47,7 @@ if ! command -v herdr >/dev/null; then
 fi
 herdr --version
 docker pull -q grafana/grafana:12.1.1 >/dev/null
+docker pull -q grafana/otel-lgtm:0.34.0 >/dev/null
 mkdir -p "$ROOT/bin"
 install -m 0755 "$DASHR_BUILT" "$ROOT/bin/dashr"
 ok "herdr, docker and dashr ready"
@@ -72,6 +73,8 @@ herdr workspace create --label e2e --cwd "$WORK" >/dev/null
 herdr plugin link "$ROOT" >/dev/null
 CONFIG_DIR="$(herdr plugin config-dir herdr-dashr | tail -n 1)"
 STATE_DIR="$HOME/.local/state/herdr/plugins/herdr-dashr"
+# Records left by an aborted earlier run would be mistaken for this run's.
+rm -rf "$STATE_DIR/sessions"
 mkdir -p "$CONFIG_DIR"
 
 # A fake AWS CLI for the pipeline scenario.
@@ -287,7 +290,7 @@ python3 - "$WORK/example.out" <<'EOF2' || fail "skill resource or example assert
 import json, sys
 lines = [json.loads(l) for l in open(sys.argv[1])]
 uris = json.loads(next(l for l in lines if l["tool"] == "resources/list")["text"])
-assert "dashr://guide/SKILL.md" in uris and len(uris) == 4, uris
+assert "dashr://guide/SKILL.md" in uris and len(uris) == 5, uris
 reads = [l["text"] for l in lines if l["tool"] == "resources/read"]
 assert reads[0].startswith("---\nname: herdr-dashr") and "CloudWatch" in reads[1]
 init = json.loads(next(l for l in lines if l["tool"] == "initialize")["text"])
@@ -361,6 +364,135 @@ wait_for 20 "! docker ps --format '{{.Names}}' | grep -q dashr-e2e-orphan" || fa
 docker ps --format '{{.Names}}' | grep -q dashr-e2e-foreign || fail "another server's container was reaped"
 docker rm -f dashr-e2e-foreign >/dev/null
 ok "orphan of this server reaped; another server's container left alone"
+
+log "AC-OTEL: one OpenTelemetry container per pane"
+herdr plugin action invoke herdr-dashr.otel >/dev/null
+wait_for 120 "grep -l '\"otlp\": {' $STATE_DIR/sessions/*.json" || fail "no OpenTelemetry session record appeared"
+ORECORD="$(grep -l '"otlp": {' "$STATE_DIR"/sessions/*.json | head -n 1)"
+OSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$ORECORD")"
+OPANE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pane_id"])' "$ORECORD")"
+OPORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$ORECORD")"
+OTLP_HTTP="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["otlp"]["http_port"])' "$ORECORD")"
+OCONTAINER="herdr-grafana-$OSESSION"
+[ "$(docker ps -q --filter "label=herdr.dashr.session=$OSESSION" | wc -l)" -eq 1 ] || fail "not exactly one container for the session"
+python3 - "$(docker inspect "$OCONTAINER")" <<'EOF2' || fail "OpenTelemetry container is not hardened as specified"
+import json, sys
+c = json.loads(sys.argv[1])[0]
+host = c["HostConfig"]
+assert c["Config"]["Image"].startswith("grafana/otel-lgtm:"), c["Config"]["Image"]
+assert host["ReadonlyRootfs"] is True and host["LogConfig"]["Type"] == "none"
+assert host["Memory"] == host["MemorySwap"] and "ALL" in (host["CapDrop"] or [])
+for port in ("3000/tcp", "4317/tcp", "4318/tcp"):
+    assert all(b["HostIp"] == "127.0.0.1" for b in host["PortBindings"][port]), port
+volumes = {m["Destination"] for m in c["Mounts"] if m["Type"] == "volume"}
+assert volumes == {"/data", "/var/tempo"}, volumes
+binds = {m["Destination"] for m in c["Mounts"] if m["Type"] == "bind"}
+assert "/otel-lgtm/tempo-config.yaml" in binds, binds
+EOF2
+OVOLUMES="$(docker inspect "$OCONTAINER" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}')"
+curl -fsS -H 'content-type: application/json' -d '{"resourceLogs":[]}' "http://127.0.0.1:$OTLP_HTTP/v1/logs" >/dev/null || fail "OTLP/HTTP does not accept logs"
+ok "one hardened otel-lgtm container; Grafana and OTLP (gRPC, HTTP) on loopback only; telemetry in anonymous volumes"
+wait_for 30 "herdr pane read $OPANE --source visible | grep -q 'OTLP:      http://127.0.0.1:$OTLP_HTTP'" || fail "text view does not show the OTLP endpoint"
+wait_for 30 "grep -q '\"chat_pane\": \"' $ORECORD" || fail "OpenTelemetry chat pane not recorded"
+OCHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("chat_pane") or "")' "$ORECORD")"
+herdr pane run "$OCHAT" 'echo "ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT"' >/dev/null
+wait_for 20 "herdr pane read $OCHAT --source recent | grep -q 'ENDPOINT=http://127.0.0.1:$OTLP_HTTP'" || fail "chat pane lacks OTEL_EXPORTER_OTLP_ENDPOINT"
+ok "text view shows the endpoint; the chat pane exports OTEL_EXPORTER_OTLP_ENDPOINT"
+
+log "AC-LOGX: expected log messages light up; a forbidden one blocks the pane"
+cat >"$WORK/logx.json" <<'EOF2'
+[
+  {"tool": "session_info"},
+  {"tool": "expect_logs", "arguments": {"selector": "{service_name=\"checkout\"}", "expectations": [
+    {"name": "order created", "pattern": "order \\d+ created"},
+    {"name": "payment captured", "pattern": "payment captured"},
+    {"name": "no exceptions", "pattern": "exception|panicked", "expect": "absent"}]}},
+  {"tool": "expect_logs", "arguments": {"expectations": [{"name": "bad", "pattern": "(?i)x"}]}},
+  {"tool": "log_expectations"}
+]
+EOF2
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/logx.json" >"$WORK/logx.out"
+python3 - "$WORK/logx.out" "$OTLP_HTTP" <<'EOF2' || fail "expect_logs assertions failed"
+import json, sys
+by = {}
+for line in map(json.loads, open(sys.argv[1])):
+    by.setdefault(line["tool"], []).append(line)
+info = json.loads(by["session_info"][0]["text"])
+assert info["mode"] == "opentelemetry" and info["otlp"]["http_endpoint"].endswith(":" + sys.argv[2]), info
+armed, refused = by["expect_logs"]
+assert not armed["isError"] and json.loads(armed["text"])["armed"] == 3, armed["text"]
+assert refused["isError"] and "(?" in refused["text"], refused["text"]
+report = json.loads(by["log_expectations"][0]["text"])["report"]
+assert [e["outcome"] for e in report["expectations"]] == ["waiting", "waiting", "clear"], report
+assert report["passed"] is False
+EOF2
+ok "expect_logs arms three expectations (refusing a non-portable pattern); all start waiting/clear"
+DASHR_SESSION="$OSESSION" "$ROOT/bin/dashr" --state-dir "$STATE_DIR" tail --service checkout -- \
+  sh -c 'echo "INFO Order 42 created for planted.person@example.com"; echo "WARN retrying" >&2; echo "payment CAPTURED"; exit 3' >/dev/null 2>&1 \
+  && fail "dashr tail did not pass the exit code through" || [ $? -eq 3 ] || fail "dashr tail returned the wrong exit code"
+ok "dashr tail ran the command and passed exit code 3 through"
+echo '[{"tool": "log_expectations"}]' >"$WORK/logx-check.json"
+check_logx() {
+  python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/logx-check.json" \
+    | tail -n 1 | python3 -c 'import json,sys; r=json.loads(json.loads(sys.stdin.read())["text"])["report"]; print(" ".join(e["outcome"] for e in r["expectations"]), r["passed"])'
+}
+wait_for 10 "check_logx | grep -q '^seen seen clear True$'" || fail "expectations not met within 10 s: $(check_logx)"
+ok "both expected messages seen, case-insensitively; verdict passed"
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/logx-check.json" >"$WORK/logx-check.out"
+grep -q 'planted.person' "$WORK/logx-check.out" && fail "log_expectations leaked line content"
+ok "log_expectations returns counts only"
+printf 'ERROR NullPointerException in handler\n' | DASHR_SESSION="$OSESSION" "$ROOT/bin/dashr" --state-dir "$STATE_DIR" tail --service checkout >/dev/null
+wait_for 30 "check_logx | grep -q '^seen seen violated False$'" || fail "forbidden message not detected: $(check_logx)"
+wait_for 30 "herdr pane get $OPANE | grep -q '\"agent_status\":\"blocked\"'" || fail "a forbidden message did not block the pane"
+herdr pane get "$OPANE" | grep -q 'no exceptions' || true
+ok "a forbidden message turns its tile red, fails the verdict and blocks the pane"
+
+log "AC-OTEL: traces and metrics over OTLP reach Tempo and Prometheus"
+NOW_NS="$(date +%s)000000000"
+curl -fsS -H 'content-type: application/json' "http://127.0.0.1:$OTLP_HTTP/v1/traces" -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"POST /orders","kind":2,"startTimeUnixNano":"'"$NOW_NS"'","endTimeUnixNano":"'"$NOW_NS"'"}]}]}]}' >/dev/null
+curl -fsS -H 'content-type: application/json' "http://127.0.0.1:$OTLP_HTTP/v1/metrics" -d '{"resourceMetrics":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},"scopeMetrics":[{"metrics":[{"name":"dashr.e2e.orders","sum":{"aggregationTemporality":2,"isMonotonic":true,"dataPoints":[{"asInt":"5","timeUnixNano":"'"$NOW_NS"'"}]}}]}]}]}' >/dev/null
+cat >"$WORK/otel-probe.json" <<'EOF2'
+[
+  {"tool": "probe_query", "arguments": {"datasource_uid": "prometheus", "query": {"expr": "dashr_e2e_orders_total"}, "from": "now-5m"}},
+  {"tool": "probe_query", "arguments": {"datasource_uid": "tempo", "query": {"queryType": "traceql", "query": "{resource.service.name=\"checkout\"}", "limit": 5, "tableType": "traces"}, "from": "now-15m"}},
+  {"tool": "probe_query", "arguments": {"datasource_uid": "loki", "query": {"expr": "{service_name=\"checkout\"}", "queryType": "range"}, "from": "now-15m"}}
+]
+EOF2
+probe_otel() {
+  python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/otel-probe.json" >"$WORK/otel-probe.out"
+  python3 - "$WORK/otel-probe.out" <<'EOF3'
+import json, sys
+probes = [json.loads(l) for l in open(sys.argv[1]) if json.loads(l)["tool"] == "probe_query"]
+rows = [sum(f["total_rows"] for r in json.loads(p["text"])["results"] for f in r["frames"])
+        if not p["isError"] else -1 for p in probes]
+assert all(r > 0 for r in rows), rows
+EOF3
+}
+wait_for 10 probe_otel || { cat "$WORK/otel-probe.out"; fail "metric, trace or logs not queryable within 10 s"; }
+grep -q 'planted.person@example.com' "$WORK/otel-probe.out" && fail "a log line leaked unmasked through probe_query"
+grep -q '<email#1>' "$WORK/otel-probe.out" || fail "log sample was not masked"
+ok "OTLP metric in Prometheus, trace in Tempo, logs in Loki, all within 10 s; log samples masked"
+
+echo '[{"tool": "clear_log_expectations"}, {"tool": "get_dashboard"}]' >"$WORK/logx-clear.json"
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/logx-clear.json" >"$WORK/logx-clear.out"
+python3 - "$WORK/logx-clear.out" <<'EOF2' || fail "clear_log_expectations failed"
+import json, sys
+by = {json.loads(l)["tool"]: json.loads(l) for l in open(sys.argv[1])}
+assert json.loads(by["clear_log_expectations"]["text"])["cleared"] is True
+panels = json.loads(by["get_dashboard"]["text"])["dashboard"]["panels"]
+assert all(not 9000 <= p["id"] <= 9199 for p in panels), [p["id"] for p in panels]
+assert panels[0]["gridPos"]["y"] == 0
+EOF2
+wait_for 30 "herdr pane get $OPANE | grep -q '\"agent_status\":\"idle\"'" \
+  || { cat "$STATE_DIR/sessions/$OSESSION.watches.json"; herdr pane get "$OPANE"; herdr pane read "$OPANE" --source visible | tail -20; fail "pane did not return to idle after clearing"; }
+ok "clearing removes the section, restores the layout and unblocks the pane"
+herdr pane close "$OPANE" >/dev/null
+wait_for 30 "! docker ps --format '{{.Names}}' | grep -q $OCONTAINER" || fail "OpenTelemetry container still running"
+wait_for 10 "[ ! -e $ORECORD ]" || fail "OpenTelemetry session record left behind"
+for volume in $OVOLUMES; do
+  wait_for 10 "! docker volume inspect $volume" || fail "volume $volume left behind"
+done
+ok "closing the pane stops the OpenTelemetry container and deletes its files and volumes"
 
 log "doctor"
 "$ROOT/bin/dashr" --config-dir "$CONFIG_DIR" --state-dir "$STATE_DIR" doctor >"$WORK/doctor.out" || { cat "$WORK/doctor.out"; fail "doctor failed"; }
@@ -474,6 +606,46 @@ EOF2
   python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["frames"] > 0 and r["graphics_queries"] > 0, r' "$WORK/term.json" \
     || fail "terminal-browser drew no kitty graphics frames"
   ok "closing the terminal stopped Grafana and deleted the browser profile; $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["frames"])' "$WORK/term.json") frames were drawn"
+
+  log "browser pane: the live log trail highlights expected and forbidden lines"
+  OBPANE="$(herdr pane split "$ROOT_PANE" --direction right --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
+  OBCONF="$WORK/browser-otel-config"
+  mkdir -p "$OBCONF"
+  printf '[agent]\nenabled = false\n\n[monitor]\ninterval_secs = 2\n\n[otel]\nenabled = true\n' >"$OBCONF/dashr.toml"
+  env -u LANG -u LC_ALL HERDR_PANE_ID="$OBPANE" HERDR_SOCKET_PATH="$SOCK" HERDR_BIN_PATH="$(command -v herdr)" \
+    python3 "$ROOT/scripts/e2e/kitty_term.py" "$WORK/term-otel.json" 0 -- \
+    "$ROOT/bin/dashr" --config-dir "$OBCONF" --state-dir "$STATE_DIR" herdr pane dashboard &
+  OTERM_PID=$!
+  wait_for 150 "grep -l '\"pane_id\": \"$OBPANE\"' $STATE_DIR/sessions/*.json" || fail "OpenTelemetry browser pane did not start"
+  OBRECORD="$(grep -l "\"pane_id\": \"$OBPANE\"" "$STATE_DIR"/sessions/*.json | head -n 1)"
+  OBSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$OBRECORD")"
+  OBUID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dashboard_uid"])' "$OBRECORD")"
+  wait_for 60 "terminal-browser ls --all --json | grep -q '/d/$OBUID'" || fail "terminal-browser is not showing the OpenTelemetry dashboard"
+  OCDP="$(terminal-browser ls --all --json | python3 -c 'import json,sys; b=[b for b in json.load(sys.stdin)["browsers"] if any("/d/'"$OBUID"'" in t["url"] for t in b["tabs"])]; print(b[0]["cdpPort"])')"
+  DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" --config-dir "$OBCONF" --state-dir "$STATE_DIR" expect \
+    -p 'order = order \d+ created' -a 'exception' >/dev/null || fail "dashr expect failed"
+  printf 'E2E order 1 created\nE2E exception boom\nE2E plain line\n' \
+    | DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" --state-dir "$STATE_DIR" tail --service web >/dev/null
+  trail_colours() {
+    python3 "$ROOT/scripts/e2e/cdp_eval.py" "$OCDP" "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")" | python3 -c '
+import json, re, sys
+colours = json.loads(sys.stdin.read())
+rgb = {k: [int(n) for n in re.findall(r"\d+", v)[:3]] if v.startswith("rgb") else None for k, v in colours.items()}
+e, f, p = rgb["expected"], rgb["forbidden"], rgb["plain"]
+assert e and e[1] > e[0] + 50, colours
+assert f and f[0] > f[1] + 50, colours
+assert p is None or abs(p[0] - p[1]) < 30, colours
+print(colours)'
+  }
+  wait_for 60 trail_colours || { python3 "$ROOT/scripts/e2e/cdp_eval.py" "$OCDP" "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")"; fail "the live trail does not highlight the lines"; }
+  ok "live trail in the browser pane: expected line green, forbidden line red, other lines plain ($(trail_colours))"
+  terminal-browser ls --all --json | grep -q "/d/$OBUID[^\"]*from=20[0-9-]*T" || fail "dashr expect did not move the browser to the armed time range"
+  python3 "$ROOT/scripts/e2e/cdp_eval.py" "$OCDP" "/d/$OBUID" 'document.body.innerText' | grep -q 'Invalid date' && fail "time picker shows an invalid date"
+  ok "dashr expect moved the browser to the armed time range"
+  kill -TERM "$OTERM_PID"
+  wait "$OTERM_PID" || true
+  wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$OBSESSION" || fail "OpenTelemetry browser pane container still running"
+  ok "closing the terminal stopped the OpenTelemetry container"
 fi
 
 log "all $PASS checks passed"

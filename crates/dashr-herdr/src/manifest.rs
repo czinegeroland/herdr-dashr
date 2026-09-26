@@ -87,6 +87,7 @@ fn dashr(args: &[&str]) -> Vec<String> {
 pub const ACTIONS: &[(&str, &str)] = &[
     ("open", "Open live dashboard"),
     ("pipeline", "Open dashboard for a CodePipeline"),
+    ("otel", "Open live logs and traces (OpenTelemetry)"),
     ("promote", "Promote dashboard to persistent Grafana"),
     ("doctor", "Check dashr prerequisites"),
 ];

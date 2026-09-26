@@ -16,10 +16,15 @@ agent underneath to reshape it.
 - **CodePipeline bootstrap.** Ctrl-click a CodePipeline URL: the plugin finds
   the stacks it deployed and builds a first dashboard of their log groups,
   queues and DLQs, state machines and Lambdas before the agent says a word.
+- **OpenTelemetry and live log checks.** One pane-owned container can also
+  receive OTLP logs, traces and metrics. Tell the agent which log messages
+  should fire (and which must not): the dashboard shows a tile per message
+  that turns green when it is logged, and a live log trail with the matches
+  highlighted.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.2.0. 79 of 80 PRD requirements verified (npm publishing awaits its token), most by an end-to-end
+**Status:** v0.3.0. All but one PRD requirement verified (npm publishing awaits its token), most by an end-to-end
 suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
 
 ## Install
@@ -54,12 +59,39 @@ from GitHub.
 |---|---|
 | **Open live dashboard** | New tab: Grafana on top, the agent underneath. |
 | **Open dashboard for a CodePipeline** | Ctrl-click a CodePipeline console URL. |
+| **Open live logs and traces (OpenTelemetry)** | Same tab, with an OTLP endpoint and a live log trail. |
 | **Promote dashboard to persistent Grafana** | Copies the focused session's dashboard (needs `[promote]`). |
 | **Check dashr prerequisites** | Doctor popup. |
 
 Close the dashboard pane to stop Grafana; the container, runtime files and
 browser profile are deleted. The sidebar token `$dashr` shows panel health
 (`6 ok · 1 err · 1 alert`).
+
+### Live logs and log checks
+
+The OpenTelemetry action (or `[otel] enabled = true`) runs
+`grafana/otel-lgtm` instead of plain Grafana: still one container per pane,
+with Loki, Tempo and Prometheus behind an OTLP endpoint on loopback. What you
+send is queryable within about five seconds (traces in about two). Programs
+started from the chat pane find it in `OTEL_EXPORTER_OTLP_ENDPOINT`; anything
+else can be wrapped:
+
+```bash
+dashr tail -- cargo run --bin checkout     # output still on your terminal, exit code kept
+./app 2>&1 | dashr tail --service app
+```
+
+Then ask the agent: *"check that `order 42 created` and `payment captured` are
+logged and no exception is"*. It arms them (`expect_logs`), the dashboard gains
+a tile per message and a highlighted live trail, the pane notifies you as each
+arrives and turns blocked on a forbidden one, and the agent reads back a
+counts-only verdict. Without the agent:
+
+```bash
+dashr expect -p 'order created = order \d+ created' -p 'payment captured' -a 'exception'
+dashr expect --check    # exit status 0 when every expectation holds
+dashr expect --clear
+```
 
 The agent gets these MCP tools: `list_datasources`, `probe_query`,
 `apply_dashboard`, `panel_status`, `panel_data_sample`, `get_dashboard`,
@@ -102,7 +134,9 @@ you say `personal = false`.
 - `panel_status` reports rows and errors, never values. Watches are evaluated
   by the pane; the agent never sees what it alerts on.
 - Grafana runs with a read-only root, tmpfs storage, no logs, no swap and no
-  capabilities, on loopback only. The browser profile lives in memory.
+  capabilities, on loopback only. The browser profile lives in memory. In
+  OpenTelemetry mode, logs, traces and metrics are kept on disk in anonymous
+  Docker volumes that are deleted with the container.
 
 ## Develop
 

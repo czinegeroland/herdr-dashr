@@ -45,6 +45,10 @@ pub const FILES: &[(&str, &str)] = &[
         "reference/recipes.md",
         include_str!("../../../.agents/skills/herdr-dashr/reference/recipes.md"),
     ),
+    (
+        "reference/otel-and-logs.md",
+        include_str!("../../../.agents/skills/herdr-dashr/reference/otel-and-logs.md"),
+    ),
 ];
 
 /// A fingerprint of the embedded content, written to [`STAMP`].

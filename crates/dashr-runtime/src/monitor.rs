@@ -8,7 +8,7 @@
 
 use dashr_core::masking::Masker;
 use dashr_core::session::{SessionRecord, SessionStore};
-use dashr_core::watch::{self, Evaluation};
+use dashr_core::watch::{self, Evaluation, Severity};
 use dashr_grafana::Client;
 
 use crate::status::{self, PanelStatus, Summary};
@@ -28,11 +28,14 @@ pub struct Tick {
     pub summary: Summary,
     /// Every panel's status, for the text view. Carries no values.
     pub panels: Vec<PanelStatus>,
-    /// Descriptions of rules that breached since the last tick.
+    /// Descriptions of alert rules that breached since the last tick.
     pub newly_breached: Vec<String>,
+    /// Descriptions of info rules that fired since the last tick, such as
+    /// an expected log message arriving. Notified, never blocking.
+    pub newly_seen: Vec<String>,
     /// Rule ids that cleared since the last tick.
     pub cleared: Vec<String>,
-    /// Descriptions of every rule breached now.
+    /// Descriptions of every alert rule breached now.
     pub breached: Vec<String>,
     pub error: Option<String>,
 }
@@ -50,6 +53,17 @@ pub fn transitions(previous: &[String], current: &[String]) -> (Vec<String>, Vec
         .cloned()
         .collect();
     (new, cleared)
+}
+
+/// Whether a rule is breached after this evaluation. No data (a query that
+/// failed or timed out this once) is not evidence either way: the rule keeps
+/// its state instead of clearing and notifying again on the next tick.
+pub fn still_breached(evaluation: Evaluation, was_breached: bool) -> bool {
+    match evaluation {
+        Evaluation::Breached => true,
+        Evaluation::NoData => was_breached,
+        Evaluation::Clear => false,
+    }
 }
 
 /// Runs one tick against Grafana and records breach state.
@@ -74,6 +88,7 @@ pub fn tick(
     let mut state = store.load_watches(&record.session_id);
     let mut breached_ids = Vec::new();
     let mut descriptions = std::collections::BTreeMap::new();
+    let mut info = std::collections::BTreeSet::new();
     for rule in &state.rules {
         let Some(panel) = status::find_panel(&model, rule.panel_id) else {
             continue;
@@ -83,9 +98,13 @@ pub fn tick(
             .and_then(serde_json::Value::as_str)
             .unwrap_or("panel");
         let results = status::panel_results(client, &model, panel);
-        if watch::evaluate(rule, &results) == Evaluation::Breached {
+        let was = state.breached.contains(&rule.id);
+        if still_breached(watch::evaluate(rule, &results), was) {
             breached_ids.push(rule.id.clone());
             descriptions.insert(rule.id.clone(), rule.describe(title));
+            if rule.severity == Severity::Info {
+                info.insert(rule.id.clone());
+            }
         }
     }
     let (new, cleared) = transitions(&state.breached, &breached_ids);
@@ -93,18 +112,19 @@ pub fn tick(
         state.breached = breached_ids.clone();
         let _ = store.save_watches(&record.session_id, &state);
     }
+    let describe = |ids: &[String], want_info: bool| -> Vec<String> {
+        ids.iter()
+            .filter(|id| info.contains(*id) == want_info)
+            .filter_map(|id| descriptions.get(id).cloned())
+            .collect()
+    };
     Tick {
         summary,
         panels: statuses,
-        newly_breached: new
-            .iter()
-            .filter_map(|id| descriptions.get(id).cloned())
-            .collect(),
+        newly_breached: describe(&new, false),
+        newly_seen: describe(&new, true),
         cleared,
-        breached: breached_ids
-            .iter()
-            .filter_map(|id| descriptions.get(id).cloned())
-            .collect(),
+        breached: describe(&breached_ids, false),
         error: None,
     }
 }
@@ -128,6 +148,9 @@ pub fn report(tick: &Tick, reporter: &mut dyn Reporter, notify: bool) {
         }
     } else if tick.breached.is_empty() && !tick.cleared.is_empty() {
         reporter.clear();
+    }
+    if notify && !tick.newly_seen.is_empty() {
+        reporter.notify("dashr", &tick.newly_seen.join("; "));
     }
 }
 
@@ -159,6 +182,14 @@ mod tests {
         fn notify(&mut self, title: &str, body: &str) {
             self.0.push(format!("notify:{title}:{body}"));
         }
+    }
+
+    #[test]
+    fn no_data_keeps_a_rule_as_it_was() {
+        assert!(still_breached(Evaluation::NoData, true));
+        assert!(!still_breached(Evaluation::NoData, false));
+        assert!(!still_breached(Evaluation::Clear, true));
+        assert!(still_breached(Evaluation::Breached, false));
     }
 
     #[test]
@@ -198,6 +229,25 @@ mod tests {
         let mut recorder = Recorder::default();
         report(&steady, &mut recorder, true);
         assert_eq!(recorder.0, vec!["token:3 ok · 1 alert"]);
+    }
+
+    #[test]
+    fn an_info_watch_notifies_without_blocking() {
+        let tick = Tick {
+            summary: Summary {
+                ok: 2,
+                empty: 0,
+                error: 0,
+            },
+            newly_seen: vec!["✓ order created logged".into()],
+            ..Tick::default()
+        };
+        let mut recorder = Recorder::default();
+        report(&tick, &mut recorder, true);
+        assert_eq!(
+            recorder.0,
+            vec!["token:2 ok", "notify:dashr:✓ order created logged"]
+        );
     }
 
     #[test]

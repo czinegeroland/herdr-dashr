@@ -7,9 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use dashr_aws::cli::AwsCli;
 use dashr_aws::{Inventory, PipelineRef};
 use dashr_core::config::{Config, DEFAULT_IMAGE, DatasourceKind};
-use dashr_core::session::{SessionRecord, SessionStore};
+use dashr_core::session::{Otlp, SessionRecord, SessionStore};
 use dashr_core::{dashboard, ids, provisioning};
-use dashr_docker::{Docker, DockerError, RunSpec};
+use dashr_docker::{Docker, DockerError, Flavor, RunSpec};
 use dashr_grafana::{Client, GrafanaError};
 
 use crate::paths;
@@ -50,6 +50,8 @@ pub enum StartError {
     Io(#[from] std::io::Error),
     #[error("Grafana did not start: {0}")]
     Grafana(#[from] GrafanaError),
+    #[error("the OpenTelemetry endpoint did not start: {0}")]
+    Otlp(String),
     #[error("{0}")]
     Session(#[from] dashr_core::session::SessionError),
 }
@@ -144,6 +146,17 @@ fn write_provisioning(runtime_dir: &Path, contents: &str) -> std::io::Result<std
     Ok(root)
 }
 
+/// Writes a file the container user can read through a bind mount.
+fn write_readable(path: &Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))?;
+    }
+    Ok(())
+}
+
 /// Starts Grafana for a session and pushes a first dashboard.
 pub fn start(
     config: &Config,
@@ -167,7 +180,16 @@ pub fn start(
         .map(|pipeline| vec![provisioning::cloudwatch_for_region(&pipeline.region)])
         .unwrap_or_default();
     let provisioned = provisioning::build(config, &extra);
-    let provisioning_dir = match write_provisioning(&runtime_dir, &provisioned.datasources_file) {
+    let written = write_provisioning(&runtime_dir, &provisioned.datasources_file).and_then(|dir| {
+        if config.otel.enabled {
+            write_readable(
+                &dir.join(dashr_docker::TEMPO_CONFIG_NAME),
+                dashr_docker::OTEL_TEMPO_CONFIG,
+            )?;
+        }
+        Ok(dir)
+    });
+    let provisioning_dir = match written {
         Ok(dir) => dir,
         Err(error) => {
             paths::remove_runtime_dir(&runtime_dir);
@@ -187,7 +209,8 @@ pub fn start(
         &mut warnings,
     );
 
-    if config.needs_custom_image() && config.grafana.image == DEFAULT_IMAGE {
+    if config.needs_custom_image() && config.grafana.image == DEFAULT_IMAGE && !config.otel.enabled
+    {
         warnings.push(
             "Seq and Zabbix datasources need the custom image: run `dashr image build` and set grafana.image"
                 .to_owned(),
@@ -207,11 +230,30 @@ pub fn start(
     if let Some(hash) = &identity.socket_hash {
         labels.insert(dashr_docker::LABEL_SOCKET.to_owned(), hash.clone());
     }
+    // OpenTelemetry mode swaps the image for one that also runs a collector,
+    // Loki, Tempo and Prometheus: still one container per pane (DASHR-OTEL-001).
+    let otel = config.otel.enabled;
+    let (flavor, image, memory, refresh) = if otel {
+        (
+            Flavor::OtelLgtm,
+            config.otel.image.clone(),
+            config.otel.memory.clone(),
+            config.otel.refresh.clone(),
+        )
+    } else {
+        (
+            Flavor::Grafana,
+            config.grafana.image.clone(),
+            config.grafana.memory.clone(),
+            config.grafana.refresh.clone(),
+        )
+    };
     let spec = RunSpec {
         name: container.clone(),
-        image: config.grafana.image.clone(),
+        image,
+        flavor,
         labels,
-        memory: config.grafana.memory.clone(),
+        memory,
         provisioning_dir,
         env: RunSpec::grafana_env(),
         inherit_env: secrets.keys().cloned().collect(),
@@ -233,6 +275,22 @@ pub fn start(
     client
         .wait_healthy(Duration::from_secs(config.grafana.startup_timeout_secs))
         .map_err(|e| cleanup(e.into()))?;
+    let otlp = if otel {
+        let otlp = Otlp {
+            grpc_port: docker
+                .mapped_port(&container, 4317)
+                .map_err(|e| cleanup(e.into()))?,
+            http_port: docker
+                .mapped_port(&container, 4318)
+                .map_err(|e| cleanup(e.into()))?,
+        };
+        crate::otlp::Exporter::new(&otlp.http_endpoint())
+            .wait_ready(Duration::from_secs(config.grafana.startup_timeout_secs))
+            .map_err(|e| cleanup(StartError::Otlp(e)))?;
+        Some(otlp)
+    } else {
+        None
+    };
 
     let record = SessionRecord {
         session_id: identity.session_id.clone(),
@@ -243,9 +301,10 @@ pub fn start(
         dashboard_uid: ids::dashboard_uid(&identity.session_id),
         chat_pane: None,
         runtime_dir: runtime_dir.clone(),
-        refresh: config.grafana.refresh.clone(),
+        refresh,
         datasources: provisioned.policies,
         pipeline: pipeline.map(|p| format!("{} ({})", p.name, p.region)),
+        otlp,
         started_unix: now_unix(),
     };
     store.save(&record).map_err(|e| cleanup(e.into()))?;
@@ -274,6 +333,13 @@ pub fn start(
                 )
             }
         },
+        _ if otel => {
+            let otlp = record.otlp.unwrap_or(Otlp {
+                grpc_port: 0,
+                http_port: 0,
+            });
+            dashboard::otel_welcome(&otlp.http_endpoint(), &otlp.grpc_endpoint())
+        }
         _ => dashboard::welcome(
             "dashr",
             "A disposable Grafana owned by this pane. Nothing is stored; it stops when the pane closes.\n\nAsk the agent below for the dashboard you need.",

@@ -43,8 +43,9 @@ pub fn mcp(paths: &Paths, session: &str, herdr_bin: Option<String>) -> Result<()
         .map_err(|error| error.to_string())
 }
 
-pub fn session_start(paths: &Paths, name: &str, pipeline: Option<&str>) -> Result<()> {
-    let config = load_config(paths)?;
+pub fn session_start(paths: &Paths, name: &str, pipeline: Option<&str>, otel: bool) -> Result<()> {
+    let mut config = load_config(paths)?;
+    config.otel.enabled |= otel;
     let pipeline = pipeline
         .map(dashr_aws::url::parse)
         .transpose()
@@ -67,6 +68,7 @@ pub fn session_start(paths: &Paths, name: &str, pipeline: Option<&str>) -> Resul
         "url": started.record.kiosk_url(),
         "container": started.record.container,
         "in_memory": started.in_memory,
+        "otlp_endpoint": started.record.otlp.map(|otlp| otlp.http_endpoint()),
     }))
 }
 
@@ -254,4 +256,163 @@ pub fn skill_uninstall(paths: &Paths, dir: Option<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The session a command acts on: the one named, else `$DASHR_SESSION`,
+/// else the only session that `fits`.
+fn pick_session(
+    store: &SessionStore,
+    named: Option<&str>,
+    fits: impl Fn(&dashr_core::session::SessionRecord) -> bool,
+    what: &str,
+) -> Result<dashr_core::session::SessionRecord> {
+    let named = named
+        .map(str::to_owned)
+        .or_else(|| std::env::var("DASHR_SESSION").ok())
+        .filter(|id| !id.is_empty());
+    if let Some(id) = named {
+        return store.load(&id).map_err(|error| error.to_string());
+    }
+    let mut candidates: Vec<_> = store.list().into_iter().filter(|r| fits(r)).collect();
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err(format!(
+            "no {what} is running; open one (\"Open live logs and traces\" in Herdr, or `dashr session start --otel`)"
+        )),
+        _ => Err(format!(
+            "{} {what}s are running; pick one with --session or DASHR_SESSION: {}",
+            candidates.len(),
+            candidates
+                .iter()
+                .map(|r| r.session_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+pub fn tail(
+    paths: &Paths,
+    session: Option<&str>,
+    service: Option<&str>,
+    command: &[String],
+) -> Result<()> {
+    let store = SessionStore::new(&paths.state_dir);
+    let record = pick_session(
+        &store,
+        session,
+        |r| r.otlp.is_some(),
+        "OpenTelemetry session",
+    )?;
+    let otlp = record.otlp.ok_or_else(|| {
+        format!(
+            "session {} has no OpenTelemetry endpoint; open it in OpenTelemetry mode",
+            record.session_id
+        )
+    })?;
+    let exporter = dashr_runtime::otlp::Exporter::new(&otlp.http_endpoint());
+    let service = service
+        .map(str::to_owned)
+        .or_else(|| {
+            command.first().map(|program| {
+                Path::new(program)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| program.clone())
+            })
+        })
+        .unwrap_or_else(|| "stdin".to_owned());
+    let outcome = if command.is_empty() {
+        dashr_runtime::otlp::tail_stdin(exporter, &service)
+    } else {
+        dashr_runtime::otlp::tail_command(exporter, &service, command)
+            .map_err(|error| format!("could not run {}: {error}", command[0]))?
+    };
+    if outcome.dropped > 0 {
+        eprintln!(
+            "dashr tail: {} line(s) did not reach the dashboard",
+            outcome.dropped
+        );
+    }
+    match outcome.code {
+        Some(0) => Ok(()),
+        // Exit with the command's own status, not dashr's error path.
+        Some(code) => std::process::exit(code),
+        None => std::process::exit(1),
+    }
+}
+
+pub struct ExpectRequest {
+    pub present: Vec<String>,
+    pub absent: Vec<String>,
+    pub selector: Option<String>,
+    pub check: bool,
+    pub clear: bool,
+}
+
+pub fn expect(paths: &Paths, session: Option<&str>, request: ExpectRequest) -> Result<()> {
+    use dashr_core::logx::Presence;
+    use dashr_runtime::logx;
+
+    let config = load_config(paths)?;
+    let store = SessionStore::new(&paths.state_dir);
+    let record = pick_session(
+        &store,
+        session,
+        |r| logx::loki_uid(r, None).is_ok(),
+        "session with Loki",
+    )?;
+    let client = dashr_grafana::Client::local(&record.grafana_url());
+    let browser = config
+        .browser
+        .enabled
+        .then(|| Browser::new(&config.browser.command));
+    let browser = browser.as_ref();
+    let time_from = &config.grafana.time_from;
+    if request.clear {
+        let armed = logx::clear(&record, &client, browser, &store, time_from)
+            .map_err(|error| error.to_string())?;
+        println!(
+            "{}",
+            if armed {
+                "log expectations cleared"
+            } else {
+                "no log expectations were armed"
+            }
+        );
+        return Ok(());
+    }
+    if request.check {
+        let report = logx::check(&record, &client, &store, &Masker::new(&config.masking))
+            .map_err(|error| error.to_string())?;
+        print_json(&report)?;
+        return if report.passed {
+            Ok(())
+        } else {
+            Err("log expectations not met".to_owned())
+        };
+    }
+    let expectations: Vec<_> = request
+        .present
+        .iter()
+        .map(|text| logx::parse_expectation(text, Presence::Present))
+        .chain(
+            request
+                .absent
+                .iter()
+                .map(|text| logx::parse_expectation(text, Presence::Absent)),
+        )
+        .collect();
+    let armed = logx::arm(
+        &record,
+        &client,
+        browser,
+        &store,
+        time_from,
+        expectations,
+        request.selector.as_deref(),
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+    print_json(&armed)
 }
