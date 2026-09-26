@@ -245,7 +245,20 @@ pub fn otel_policies() -> Vec<DatasourcePolicy> {
 /// CloudWatch datasource of an opened pipeline. A configured datasource with
 /// the same uid wins over an extra one.
 pub fn build(config: &Config, extra: &[DatasourceConfig]) -> Provisioning {
-    let mut all: Vec<DatasourceConfig> = config.datasources.clone();
+    // OpenTelemetry mode can be switched on after the configuration was
+    // validated (the Herdr action, `--otel`), so a configured datasource may
+    // still use a uid the image provisions. The image's wins; two
+    // datasources with one uid would leave the choice to file order.
+    let mut all: Vec<DatasourceConfig> = config
+        .datasources
+        .iter()
+        .filter(|datasource| {
+            !(config.otel.enabled
+                && crate::config::OTEL_DATASOURCE_UIDS
+                    .contains(&datasource.effective_uid().as_str()))
+        })
+        .cloned()
+        .collect();
     for datasource in extra {
         if !all
             .iter()
@@ -305,6 +318,26 @@ mod tests {
 
     fn parse(text: &str) -> Config {
         Config::parse(text, "test").expect("config parses")
+    }
+
+    #[test]
+    fn otel_mode_skips_configured_datasources_that_reuse_the_image_uids() {
+        let mut config = parse(
+            "[[datasources]]\nname = \"Loki\"\nkind = \"loki\"\nurl = \"http://localhost:3100\"\n",
+        );
+        assert_eq!(build(&config, &[]).policies[0].uid, "loki");
+        config.otel.enabled = true;
+        let provisioning = build(&config, &[]);
+        assert!(
+            !provisioning.datasources_file.contains("3100"),
+            "configured Loki not provisioned"
+        );
+        let lokis = provisioning
+            .policies
+            .iter()
+            .filter(|p| p.uid == "loki")
+            .count();
+        assert_eq!(lokis, 1, "only the image's Loki");
     }
 
     #[test]

@@ -6,7 +6,7 @@
 #   scripts/e2e/run.sh [path/to/dashr]
 #
 # Acceptance criteria covered: AC-OPEN, AC-MASK, AC-ALERT, AC-CLOSE,
-# AC-PIPELINE, AC-OTEL, AC-LOGX, plus the startup reaper.
+# AC-PIPELINE, AC-OTEL, AC-LOGX, AC-LIB, plus the startup reaper.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -78,7 +78,7 @@ herdr plugin link "$ROOT" >/dev/null
 CONFIG_DIR="$(herdr plugin config-dir herdr-dashr | tail -n 1)"
 STATE_DIR="$HOME/.local/state/herdr/plugins/herdr-dashr"
 # Records left by an aborted earlier run would be mistaken for this run's.
-rm -rf "$STATE_DIR/sessions"
+rm -rf "$STATE_DIR/sessions" "$STATE_DIR/dashboards"
 mkdir -p "$CONFIG_DIR"
 
 # A fake AWS CLI for the pipeline scenario.
@@ -276,6 +276,36 @@ curl -fsS -u admin:e2e-admin "$TARGET/api/dashboards/uid/$PROMOTED_UID" | grep -
   || fail "promoted dashboard does not use the target's TestData uid"
 ok "get_dashboard works; promote refuses a missing datasource, then promotes with datasources remapped by name"
 
+log "AC-LIB: save a dashboard by name"
+cat >"$WORK/lib1.json" <<'EOF2'
+[
+  {"tool": "save_dashboard", "arguments": {"name": "E2E keep"}},
+  {"tool": "save_dashboard", "arguments": {"name": "e2e KEEP"}},
+  {"tool": "save_dashboard", "arguments": {"name": "e2e/../x"}},
+  {"tool": "save_dashboard", "arguments": {"name": "e2e KEEP", "overwrite": true}},
+  {"tool": "list_saved_dashboards"}
+]
+EOF2
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$SESSION" "$WORK/lib1.json" >"$WORK/lib1.out"
+python3 - "$WORK/lib1.out" <<'EOF2' || fail "save_dashboard assertions failed"
+import json, sys
+by = {}
+for line in map(json.loads, open(sys.argv[1])):
+    by.setdefault(line["tool"], []).append(line)
+first, again, bad, overwrite = by["save_dashboard"]
+assert not first["isError"], first["text"]
+assert json.loads(first["text"])["saved"]["title"] == "e2e promotable"
+assert again["isError"] and "already saved" in again["text"], again["text"]
+assert bad["isError"] and "name" in bad["text"], bad["text"]
+assert not overwrite["isError"], overwrite["text"]
+listed = json.loads(by["list_saved_dashboards"][0]["text"])["dashboards"]
+assert [d["saved"]["name"] for d in listed] == ["e2e KEEP"], listed
+assert listed[0]["loadable_here"] is True
+EOF2
+[ "$(ls "$STATE_DIR/dashboards")" = "e2e-keep.json" ] || fail "saved dashboard not stored under the state directory"
+"$ROOT/bin/dashr" --config-dir "$CONFIG_DIR" --state-dir "$STATE_DIR" dashboards list | grep -q 'e2e KEEP' || fail "dashr dashboards list does not show it"
+ok "save_dashboard stores it by name (one per name, case-insensitive), refuses overwrite without asking and bad names"
+
 log "skill: MCP resources, build-step install, examples on a real Grafana"
 python3 - "$ROOT/.agents/skills/herdr-dashr/reference/dashboard-json.md" "$WORK/example.json" <<'EOF2'
 import json, sys
@@ -353,6 +383,29 @@ assert result["applied"] and result["applied"] > 1, result
 assert result["inventory"]["resources"]["lambdas"] == ["api-handler"]
 EOF2
 ok "open_for_pipeline re-inspects and applies in place"
+cat >"$WORK/lib2.json" <<'EOF2'
+[
+  {"tool": "save_dashboard", "arguments": {"name": "e2e pipeline"}},
+  {"tool": "load_dashboard", "arguments": {"name": "E2E keep"}},
+  {"tool": "get_dashboard"},
+  {"tool": "load_dashboard", "arguments": {"name": "never saved"}}
+]
+EOF2
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$PSESSION" "$WORK/lib2.json" >"$WORK/lib2.out"
+python3 - "$WORK/lib2.out" <<'EOF2' || fail "load_dashboard assertions failed"
+import json, sys
+by = {}
+for line in map(json.loads, open(sys.argv[1])):
+    by.setdefault(line["tool"], []).append(line)
+assert not by["save_dashboard"][0]["isError"], by["save_dashboard"][0]["text"]
+loaded, missing = by["load_dashboard"]
+assert not loaded["isError"], loaded["text"]
+assert json.loads(loaded["text"])["loaded"] == "e2e KEEP"
+model = json.loads(by["get_dashboard"][0]["text"])["dashboard"]
+assert model["title"] == "e2e promotable" and model["uid"] != "", model["title"]
+assert missing["isError"] and "e2e pipeline" in missing["text"], missing["text"]
+EOF2
+ok "a dashboard saved in one pane loads into a later pane; unknown names list what is saved"
 herdr pane close "$PANE" >/dev/null
 wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$PSESSION" || fail "pipeline container still running"
 
@@ -402,6 +455,19 @@ OCHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("ch
 herdr pane run "$OCHAT" 'echo "ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT"' >/dev/null
 wait_for 20 "herdr pane read $OCHAT --source recent | grep -q 'ENDPOINT=http://127.0.0.1:$OTLP_HTTP'" || fail "chat pane lacks OTEL_EXPORTER_OTLP_ENDPOINT"
 ok "text view shows the endpoint; the chat pane exports OTEL_EXPORTER_OTLP_ENDPOINT"
+
+echo '[{"tool": "list_saved_dashboards"}, {"tool": "load_dashboard", "arguments": {"name": "e2e pipeline"}}, {"tool": "get_dashboard"}]' >"$WORK/lib3.json"
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/lib3.json" >"$WORK/lib3.out"
+python3 - "$WORK/lib3.out" <<'EOF2' || fail "missing-datasource refusal failed"
+import json, sys
+by = {json.loads(l)["tool"]: json.loads(l) for l in open(sys.argv[1])}
+listed = {d["saved"]["name"]: d["loadable_here"] for d in json.loads(by["list_saved_dashboards"]["text"])["dashboards"]}
+assert listed == {"e2e pipeline": False, "e2e KEEP": True}, listed
+refused = by["load_dashboard"]
+assert refused["isError"] and "dashr-cloudwatch-eu-west-1" in refused["text"], refused["text"]
+assert json.loads(by["get_dashboard"]["text"])["dashboard"]["title"] == "OpenTelemetry", "nothing changed"
+EOF2
+ok "a saved dashboard needing a datasource this session lacks is refused, naming it, and nothing changes"
 
 log "AC-LOGX: expected log messages light up; a forbidden one blocks the pane"
 cat >"$WORK/logx.json" <<'EOF2'

@@ -87,7 +87,7 @@ pub fn mcp_config(
 }
 
 /// The opening prompt for the agent.
-pub fn opening_prompt(started: &Started) -> String {
+pub fn opening_prompt(started: &Started, saved: &[String]) -> String {
     let mut prompt = String::from(
         "You are working in a herdr-dashr session: the pane above shows a live Grafana dashboard that only the human sees. \
 Use the dashr MCP tools and follow their privacy rules.",
@@ -108,6 +108,17 @@ Call panel_status, fix what is empty or failing, then ask the human what they ar
         ),
         None if started.record.otlp.is_some() => {}
         None => prompt.push_str(" Call list_datasources, then ask the human what they want to see."),
+    }
+    if !saved.is_empty() {
+        prompt.push_str(&format!(
+            " Dashboards saved on this machine: {}. If the human names one, load_dashboard reopens it; save_dashboard keeps a new one.",
+            saved
+                .iter()
+                .take(10)
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     if let Some(otlp) = &started.record.otlp {
         prompt.push_str(&format!(
@@ -311,7 +322,18 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
             serde_json::to_vec_pretty(&mcp).unwrap_or_default(),
         )
         .map_err(|error| error.to_string())?;
-        let argv = agent_argv(&config.agent.command, &mcp_path, &opening_prompt(&started));
+        let argv = agent_argv(
+            &config.agent.command,
+            &mcp_path,
+            &opening_prompt(
+                &started,
+                &dashr_core::library::Library::new(&paths.state_dir)
+                    .list()
+                    .into_iter()
+                    .map(|summary| summary.name)
+                    .collect::<Vec<_>>(),
+            ),
+        );
         let cwd = std::env::var(ORIGIN_CWD_ENV)
             .ok()
             .filter(|cwd| Path::new(cwd).is_dir());
@@ -481,6 +503,20 @@ mod tests {
             value["mcpServers"]["grafana"]["env"]["GRAFANA_URL"],
             "http://127.0.0.1:32768"
         );
+    }
+
+    #[test]
+    fn opening_prompt_names_saved_dashboards() {
+        let started = Started {
+            record: record(),
+            in_memory: true,
+            inventory: None,
+            warnings: vec![],
+        };
+        let prompt = opening_prompt(&started, &["checkout debug".into(), "dlq".into()]);
+        assert!(prompt.contains("\"checkout debug\", \"dlq\""), "{prompt}");
+        assert!(prompt.contains("load_dashboard"));
+        assert!(!opening_prompt(&started, &[]).contains("load_dashboard"));
     }
 
     #[test]

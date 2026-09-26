@@ -43,6 +43,9 @@ Loki, Tempo and Prometheus. To check that the right log messages fire, arm them 
 the dashboard gains a tile per message (green when seen, red for a forbidden one) and a live \
 trail highlighting them; log_expectations returns the verdict as counts.
 
+When the human wants to keep a dashboard, save_dashboard names and stores it on this machine; \
+list_saved_dashboards and load_dashboard bring it back in a later session.
+
 Follow the herdr-dashr skill for the full loop, panel JSON and query models per datasource. \
 If the skill is not loaded, read the same guide from this server's resources: \
 dashr://guide/SKILL.md, dashr://guide/reference/dashboard-json.md, \
@@ -72,6 +75,7 @@ pub struct DashrTools {
     browser: Option<Browser>,
     aws: AwsCli,
     herdr: Option<Herdr>,
+    library: dashr_core::library::Library,
 }
 
 impl DashrTools {
@@ -87,6 +91,10 @@ impl DashrTools {
             .enabled
             .then(|| Browser::new(&config.browser.command));
         let aws = AwsCli::new(&config.aws.cli, config.aws.profile.as_deref());
+        // Saved dashboards live beside the session files, under the state
+        // directory, so they outlive every session.
+        let library =
+            dashr_core::library::Library::new(store.dir().parent().unwrap_or(store.dir()));
         Self {
             config,
             store,
@@ -95,6 +103,7 @@ impl DashrTools {
             browser,
             aws,
             herdr,
+            library,
         }
     }
 
@@ -495,6 +504,89 @@ impl DashrTools {
         }
     }
 
+    fn save_dashboard(&self, arguments: &Value) -> ToolOutput {
+        let record = match self.record() {
+            Ok(record) => record,
+            Err(error) => return ToolOutput::Error(error),
+        };
+        let Some(name) = arguments.get("name").and_then(Value::as_str) else {
+            return ToolOutput::Error("save_dashboard needs a name".into());
+        };
+        let overwrite = arguments
+            .get("overwrite")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        match dashr_runtime::library::save(
+            &record,
+            &Self::client(&record),
+            &self.library,
+            name,
+            overwrite,
+        ) {
+            Ok(outcome) => ToolOutput::Json(json!({
+                "saved": outcome.saved,
+                "notes": outcome.notes,
+                "next": "load_dashboard with this name reopens it in any later session"
+            })),
+            Err(error) => ToolOutput::Error(format!("not saved: {error}")),
+        }
+    }
+
+    fn list_saved_dashboards(&self) -> ToolOutput {
+        let available = self.record().map(|r| r.datasource_uids()).ok();
+        let saved: Vec<Value> = self
+            .library
+            .list()
+            .into_iter()
+            .map(|summary| {
+                let loadable = available
+                    .as_ref()
+                    .map(|uids| summary.datasources.iter().all(|uid| uids.contains(uid)));
+                json!({"saved": summary, "loadable_here": loadable})
+            })
+            .collect();
+        ToolOutput::Json(json!({"dashboards": saved}))
+    }
+
+    fn load_dashboard(&self, arguments: &Value) -> ToolOutput {
+        let record = match self.record() {
+            Ok(record) => record,
+            Err(error) => return ToolOutput::Error(error),
+        };
+        let Some(name) = arguments.get("name").and_then(Value::as_str) else {
+            return ToolOutput::Error("load_dashboard needs a name".into());
+        };
+        match dashr_runtime::library::load(
+            &record,
+            &Self::client(&record),
+            self.browser.as_ref(),
+            &self.store,
+            &self.library,
+            name,
+            &self.config.grafana.time_from,
+        ) {
+            Ok(outcome) => ToolOutput::Json(json!({
+                "loaded": outcome.name,
+                "panel_count": outcome.dashboard.panel_count,
+                "warnings": outcome.dashboard.warnings,
+                "browser_reloaded": outcome.dashboard.reloaded,
+                "next": "call panel_status: data may have changed since it was saved"
+            })),
+            Err(error) => ToolOutput::Error(format!("not loaded: {error}")),
+        }
+    }
+
+    fn delete_saved_dashboard(&self, arguments: &Value) -> ToolOutput {
+        let Some(name) = arguments.get("name").and_then(Value::as_str) else {
+            return ToolOutput::Error("delete_saved_dashboard needs a name".into());
+        };
+        match self.library.delete(name) {
+            Ok(true) => ToolOutput::Json(json!({"deleted": name})),
+            Ok(false) => ToolOutput::Error(format!("no saved dashboard named {name:?}")),
+            Err(error) => ToolOutput::Error(error.to_string()),
+        }
+    }
+
     fn screenshot(&self) -> ToolOutput {
         let record = match self.record() {
             Ok(record) => record,
@@ -747,6 +839,29 @@ impl Tools for DashrTools {
                 empty.clone(),
             ),
             tool(
+                "save_dashboard",
+                "Save the current dashboard on this machine under a name, to reload it in a later session. Saves panels, queries and layout only (never data); the log-expectation section is left out. Refuses an existing name unless overwrite is true — ask the human before overwriting.",
+                json!({"type": "object", "required": ["name"], "properties": {
+                    "name": {"type": "string", "description": "e.g. 'checkout debug'. Letters, digits, spaces, - _ ."},
+                    "overwrite": {"type": "boolean"}
+                }}),
+            ),
+            tool(
+                "list_saved_dashboards",
+                "Dashboards saved on this machine: name, title, panel count, datasources, and whether this session has every datasource it needs (loadable_here).",
+                empty.clone(),
+            ),
+            tool(
+                "load_dashboard",
+                "Replace the current dashboard with a saved one and reload the browser pane. Refused, changing nothing, when this session lacks a datasource it uses.",
+                json!({"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}),
+            ),
+            tool(
+                "delete_saved_dashboard",
+                "Delete a saved dashboard. Only when the human asks for it.",
+                json!({"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}),
+            ),
+            tool(
                 "promote",
                 "Copy the current dashboard to the persistent Grafana configured by the human, remapping datasources by name.",
                 json!({"type": "object", "properties": {"title": {"type": "string"}}}),
@@ -768,6 +883,10 @@ impl Tools for DashrTools {
             "screenshot" => self.screenshot(),
             "open_for_pipeline" => self.open_for_pipeline(arguments),
             "promote" => self.promote(arguments),
+            "save_dashboard" => self.save_dashboard(arguments),
+            "list_saved_dashboards" => self.list_saved_dashboards(),
+            "load_dashboard" => self.load_dashboard(arguments),
+            "delete_saved_dashboard" => self.delete_saved_dashboard(arguments),
             "session_info" => self.session_info(),
             "expect_logs" => self.expect_logs(arguments),
             "log_expectations" => self.log_expectations(),

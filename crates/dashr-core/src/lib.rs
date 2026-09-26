@@ -10,6 +10,7 @@ pub mod config;
 pub mod dashboard;
 pub mod frames;
 pub mod ids;
+pub mod library;
 pub mod logx;
 pub mod masking;
 pub mod otlp;

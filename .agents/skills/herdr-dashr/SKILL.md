@@ -43,7 +43,10 @@ one in twenty.
    rebuilding from scratch.
 7. **Watch and keep.** If the human wants to be told when something happens,
    `watch_panel` (evaluated locally; you never see the values). If the
-   dashboard is worth keeping, `promote` it.
+   dashboard is worth keeping, `save_dashboard` it under a name the human
+   picks (it stays on this machine and `load_dashboard` reopens it in a
+   later pane), or `promote` it to the team's Grafana. When a session starts
+   and the human names a saved dashboard, load it before building anything.
 
 Report briefly after each apply: what the dashboard now shows and what is
 still empty or failing. Do not describe values — you do not know them; the
@@ -78,6 +81,7 @@ human can see them.
 | `open_for_pipeline` | Inspect an AWS CodePipeline and apply a first dashboard. |
 | `promote` | Copy the dashboard to the team's persistent Grafana. |
 | `session_info` | Mode and, in OpenTelemetry mode, the OTLP endpoint programs export to. |
+| `save_dashboard` / `list_saved_dashboards` / `load_dashboard` / `delete_saved_dashboard` | Keep a dashboard on this machine by name and reopen it in a later session. |
 | `expect_logs` / `log_expectations` / `clear_log_expectations` | "Did the right log messages fire?" — tiles per expected (or forbidden) message, a highlighted live trail, a counts-only verdict. |
 
 The same references are available as MCP resources (`dashr://guide/...`) if

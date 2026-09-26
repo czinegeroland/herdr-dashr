@@ -43,7 +43,13 @@ pub fn mcp(paths: &Paths, session: &str, herdr_bin: Option<String>) -> Result<()
         .map_err(|error| error.to_string())
 }
 
-pub fn session_start(paths: &Paths, name: &str, pipeline: Option<&str>, otel: bool) -> Result<()> {
+pub fn session_start(
+    paths: &Paths,
+    name: &str,
+    pipeline: Option<&str>,
+    otel: bool,
+    load: Option<&str>,
+) -> Result<()> {
     let mut config = load_config(paths)?;
     config.otel.enabled |= otel;
     let pipeline = pipeline
@@ -62,6 +68,21 @@ pub fn session_start(paths: &Paths, name: &str, pipeline: Option<&str>, otel: bo
     .map_err(|error| error.to_string())?;
     for warning in &started.warnings {
         eprintln!("dashr: {warning}");
+    }
+    if let Some(saved) = load {
+        let store = SessionStore::new(&paths.state_dir);
+        let client = dashr_grafana::Client::local(&started.record.grafana_url());
+        if let Err(error) = dashr_runtime::library::load(
+            &started.record,
+            &client,
+            None,
+            &store,
+            &library(paths),
+            saved,
+            &config.grafana.time_from,
+        ) {
+            eprintln!("dashr: saved dashboard not loaded: {error}");
+        }
     }
     print_json(&serde_json::json!({
         "session_id": started.record.session_id,
@@ -415,4 +436,93 @@ pub fn expect(paths: &Paths, session: Option<&str>, request: ExpectRequest) -> R
     )
     .map_err(|error| error.to_string())?;
     print_json(&armed)
+}
+
+fn library(paths: &Paths) -> dashr_core::library::Library {
+    dashr_core::library::Library::new(&paths.state_dir)
+}
+
+pub fn dashboards_save(
+    paths: &Paths,
+    session: Option<&str>,
+    name: &str,
+    force: bool,
+) -> Result<()> {
+    let store = SessionStore::new(&paths.state_dir);
+    let record = pick_session(&store, session, |_| true, "session")?;
+    let client = dashr_grafana::Client::local(&record.grafana_url());
+    let outcome = dashr_runtime::library::save(&record, &client, &library(paths), name, force)
+        .map_err(|error| error.to_string())?;
+    for note in &outcome.notes {
+        eprintln!("dashr: {note}");
+    }
+    println!(
+        "saved {:?}: {} panels from {}",
+        outcome.saved.name, outcome.saved.panels, record.session_id
+    );
+    Ok(())
+}
+
+pub fn dashboards_list(paths: &Paths) -> Result<()> {
+    let list = library(paths).list();
+    if list.is_empty() {
+        println!("no saved dashboards (save one with `dashr dashboards save <name>`)");
+    }
+    for summary in list {
+        println!(
+            "{:<30} {:>3} panels  {}{}",
+            summary.name,
+            summary.panels,
+            summary.title,
+            summary
+                .origin
+                .map(|origin| format!("  ({origin})"))
+                .unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+pub fn dashboards_load(paths: &Paths, session: Option<&str>, name: &str) -> Result<()> {
+    let config = load_config(paths)?;
+    let store = SessionStore::new(&paths.state_dir);
+    let record = pick_session(&store, session, |_| true, "session")?;
+    let client = dashr_grafana::Client::local(&record.grafana_url());
+    let browser = config
+        .browser
+        .enabled
+        .then(|| Browser::new(&config.browser.command));
+    let outcome = dashr_runtime::library::load(
+        &record,
+        &client,
+        browser.as_ref(),
+        &store,
+        &library(paths),
+        name,
+        &config.grafana.time_from,
+    )
+    .map_err(|error| error.to_string())?;
+    println!(
+        "loaded {:?} into {} ({} panels)",
+        outcome.name, record.session_id, outcome.dashboard.panel_count
+    );
+    Ok(())
+}
+
+pub fn dashboards_show(paths: &Paths, name: &str) -> Result<()> {
+    let saved = library(paths)
+        .load(name)
+        .map_err(|error| error.to_string())?;
+    print_json(&saved.dashboard)
+}
+
+pub fn dashboards_delete(paths: &Paths, name: &str) -> Result<()> {
+    match library(paths).delete(name) {
+        Ok(true) => {
+            println!("deleted {name:?}");
+            Ok(())
+        }
+        Ok(false) => Err(format!("no saved dashboard named {name:?}")),
+        Err(error) => Err(error.to_string()),
+    }
 }
