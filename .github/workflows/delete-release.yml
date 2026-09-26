@@ -1,0 +1,44 @@
+name: Delete release
+
+# Removes a GitHub release and its tag, for sessions that cannot push or
+# delete tags themselves (the v0.1.0 re-release, DEC-037). Manual only, and
+# the tag must be typed twice.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to delete, for example v0.2.0
+        required: true
+        type: string
+      confirm:
+        description: Type the tag again to confirm
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  delete:
+    name: Delete ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the release and its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "$TAG" = "$CONFIRM" ] || { echo "::error::confirm must repeat the tag"; exit 1; }
+          case "$TAG" in v[0-9]*) ;; *) echo "::error::$TAG is not a version tag"; exit 1 ;; esac
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+            echo "deleted release $TAG and its tag"
+          fi
+          # A tag without a release (or one --cleanup-tag left behind).
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG"
+            echo "deleted tag $TAG"
+          fi

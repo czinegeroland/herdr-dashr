@@ -9,9 +9,9 @@
 | Herdr plugin id | `herdr-dashr` |
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Draft |
-| PRD version | 0.3.0 |
-| Delivery phase | v0.3.0 - OpenTelemetry, live log checks, saved dashboards |
-| Last updated | 2026-09-26T16:05:00Z |
+| PRD version | 0.1.0 |
+| Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
+| Last updated | 2026-09-26T16:40:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -145,8 +145,8 @@ Crates:
 | M1 | Libraries: core, Grafana client, Docker lifecycle, Herdr wrapper, AWS bootstrap, runtime, MCP server. |
 | M2 | `dashr` binary and Herdr wiring: manifest, actions, panes, hooks, install. |
 | M3 | End-to-end suite against real Herdr and Grafana in CI; releases. |
-| M4 | Agent skill for dynamic dashboard building (v0.2.0). |
-| M5 | OpenTelemetry mode and live log checks (v0.3.0). |
+| M4 | Agent skill for dynamic dashboard building. |
+| M5 | OpenTelemetry mode, live log checks, saved dashboards. The whole of M0-M5 ships as the single public release v0.1.0 (DEC-037). |
 
 ## 8. Functional requirements
 
@@ -272,7 +272,7 @@ Crates:
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
 | DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Verified | Release v0.1.0 by `.github/workflows/release.yml`: 4 targets, each with a `.sha256` |
-| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | `.github/workflows/npm-publish.yml`, `scripts/build-npm-packages.mjs`, `npm/dashr/bin.js`; `crates/dashr-cli/tests/distribution.rs`; publish, idempotent re-publish, `install.sh` and `npx` verified against a local registry with the v0.2.0 archives; first real publish needs `NPM_TOKEN` (OQ-008) |
+| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | `.github/workflows/npm-publish.yml`, `scripts/build-npm-packages.mjs`, `npm/dashr/bin.js`; `crates/dashr-cli/tests/distribution.rs`; publish, idempotent re-publish, `install.sh` and `npx` verified against a local registry; `NPM_TOKEN` is now set and the first real publish follows the v0.1.0 release (OQ-008) |
 
 ### 8.12 Agent skill (SKILL)
 
@@ -390,6 +390,7 @@ Crates:
 | DEC-034 | Grafana silently ignores a dashboard `refresh` that is not in its `timepicker.refresh_intervals`, whose default starts at 5s: the OpenTelemetry sessions' 2s refresh left the dashboard static until reloaded (the plain sessions' 5s was unaffected). Found while taking screenshots of a running session, not by the e2e suite, whose lines arrived before the page loaded. dashr now adds the pinned interval to the list, the e2e suite ships a line after the page has loaded and waits for it to appear, and CI keeps screenshots of the browser pane (`e2e-screens` artifact). |
 | DEC-035 | Saved dashboards are JSON files in the plugin state directory (`dashboards/<name>.json`), not in Grafana: every session's Grafana is disposable, and a file per dashboard is easy to inspect, back up or delete. File names are the lowercased, sanitised name, so names differing only in case are one dashboard on every file system. Each file records the datasource uids its panels use, so a load can refuse up front instead of applying a dashboard whose panels would all fail. |
 | DEC-036 | Configured datasources that reuse a uid of the OpenTelemetry image are left out of provisioning, with a warning, when OpenTelemetry mode is switched on at run time. The configuration check only runs when `[otel] enabled` is in the file, so the action and `--otel` let two datasources share a uid, and which one Grafana kept depended on file order (found while writing the saved-dashboards scenario, whose configuration has a `Loki` datasource). |
+| DEC-037 | One public release. The earlier v0.1.0 and v0.2.0 GitHub releases (never published to npm) are deleted with their tags, and the version returns to 0.1.0: the first release anyone installs is v0.1.0 with every feature to date. `Delete release` (`.github/workflows/delete-release.yml`, manual, the tag typed twice) removes a release and its tag for sessions that cannot delete tags. Ledger rows naming v0.2.0 and v0.3.0 describe work that is now part of v0.1.0. |
 
 ## 13. Open questions and risks
 
@@ -402,7 +403,7 @@ Crates:
 | OQ-005 | macOS input helper of terminal-browser may need accessibility permission on managed machines. |
 | OQ-006 | CloudWatch Live Tail and Loki tail are not Grafana-native streams; panels refresh on an interval instead. |
 | OQ-007 | Resolved: terminal-browser refuses root and needs a kitty-graphics terminal; CI runs it as the non-root runner inside `scripts/e2e/kitty_term.py`, which answers the graphics probe and counts frames. Real terminals (Ghostty, kitty, WezTerm, iTerm2) remain subject to OQ-001. |
-| OQ-008 | Publishing to npm needs the `NPM_TOKEN` repository secret. Until it is set, Publish to npm fails with a message saying so and installs use the GitHub release. |
+| OQ-008 | Resolved: the `NPM_TOKEN` repository secret is set; Publish to npm runs after every release. |
 | OQ-009 | The OpenTelemetry image is large (about 0.9 GB to download, 3.6 GB unpacked), so the first OpenTelemetry pane waits for the pull; later ones start in seconds. dashr's Tempo configuration is a copy of the image's (0.34.0) and must be re-checked when the image is bumped. |
 
 ## 14. Delivery ledger
@@ -422,6 +423,7 @@ Crates:
 | 2026-09-26 | v0.3.0: OpenTelemetry mode — one `grafana/otel-lgtm` container per pane with an OTLP endpoint, announced to the human and the agent — plus `dashr tail`, and live log checks: expectation tiles and a highlighted live log trail on top of the dashboard, notifications as messages arrive, a counts-only verdict (`expect_logs`, `log_expectations`, `clear_log_expectations`, `session_info`, `dashr expect`). Watches gain a severity and hold their state through a panel with no data. Skill reference for OTel data and log checks. OpenTelemetry telemetry kept on disk in anonymous volumes deleted with the container, and traces searchable in about 2 s instead of 30 s (DEC-033). | OTEL-001..006, LOGX-001..005, ALERT-005, SKILL-005, GRAF-002, SEC-004 |
 | 2026-09-26 | Fixed the OpenTelemetry dashboard not refreshing by itself (DEC-034); the e2e suite now checks self-refresh and uploads screenshots of the browser pane. | VIEW-001 |
 | 2026-09-26 | Saved dashboards: name the current dashboard and reload it in a later pane (`save_dashboard`, `list_saved_dashboards`, `load_dashboard`, `delete_saved_dashboard`, `dashr dashboards`, `dashr session start --load`); the agent is told which are saved. Fixed a datasource uid clash when OpenTelemetry mode is switched on at run time (DEC-036). | LIB-001..004, OTEL-002 |
+| 2026-09-26 | Versions consolidated into a single public v0.1.0 (DEC-037): version reset to 0.1.0, `Delete release` workflow to remove the earlier v0.1.0 and v0.2.0 releases before re-releasing; `NPM_TOKEN` set, so v0.1.0 is the first npm publish. The end-to-end metric check now probes with an instant query: a range query shows a point sent "now" only after the next step boundary, which made the 10 s check pass or fail by clock alignment. | TECH-005 |
 
 ### Requirement completion summary
 
