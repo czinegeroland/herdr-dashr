@@ -1,0 +1,9 @@
+/target/
+/dist/
+# What the plugin's build step installs.
+/bin/
+*.log
+.env
+.env.*
+.DS_Store
+__pycache__/
