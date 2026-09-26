@@ -348,6 +348,7 @@ pub fn normalize(input: &Value, pins: &Pins<'_>) -> Result<Normalized, Dashboard
     object.remove("id");
     object.remove("version");
     object.insert("refresh".into(), json!(pins.refresh));
+    allow_refresh(object, pins.refresh);
     if !object.get("time").is_some_and(Value::is_object) {
         object.insert("time".into(), json!({"from": pins.time_from, "to": "now"}));
     }
@@ -397,6 +398,32 @@ pub fn welcome(title: &str, note: &str) -> Value {
             }
         ]
     })
+}
+
+/// Grafana's own refresh choices, used when a dashboard lists none.
+const DEFAULT_REFRESH_INTERVALS: &[&str] = &[
+    "5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d",
+];
+
+/// Grafana silently ignores a `refresh` that is not one of the dashboard's
+/// `timepicker.refresh_intervals`, and the default list starts at 5s, so the
+/// OpenTelemetry sessions' 2s refresh left the dashboard static. The pinned
+/// interval is always added to the list.
+fn allow_refresh(object: &mut serde_json::Map<String, Value>, refresh: &str) {
+    let timepicker = object.entry("timepicker").or_insert_with(|| json!({}));
+    if !timepicker.is_object() {
+        *timepicker = json!({});
+    }
+    let mut intervals: Vec<Value> = timepicker
+        .get("refresh_intervals")
+        .and_then(Value::as_array)
+        .filter(|list| !list.is_empty())
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_REFRESH_INTERVALS.iter().map(|i| json!(i)).collect());
+    if !intervals.iter().any(|i| i.as_str() == Some(refresh)) {
+        intervals.insert(0, json!(refresh));
+    }
+    timepicker["refresh_intervals"] = Value::Array(intervals);
 }
 
 /// The first dashboard of an OpenTelemetry session: where to send data, a
@@ -465,6 +492,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_pinned_refresh_is_always_an_allowed_interval() {
+        let known = known();
+        let fast = Pins {
+            refresh: "2s",
+            ..pins(&known)
+        };
+        let normalized = normalize(&json!({"title": "t", "panels": []}), &fast).unwrap();
+        let intervals = &normalized.dashboard["timepicker"]["refresh_intervals"];
+        assert_eq!(
+            intervals[0], "2s",
+            "Grafana ignores a refresh missing from this list"
+        );
+        assert!(intervals.as_array().unwrap().contains(&json!("1m")));
+        // A list the agent wrote is kept, with the pinned interval added.
+        let own =
+            json!({"title": "t", "panels": [], "timepicker": {"refresh_intervals": ["10s", "1m"]}});
+        let normalized = normalize(&own, &fast).unwrap();
+        assert_eq!(
+            normalized.dashboard["timepicker"]["refresh_intervals"],
+            json!(["2s", "10s", "1m"])
+        );
+    }
+
     fn known() -> Vec<String> {
         vec!["dashr-testdata".to_owned(), "prom".to_owned()]
     }
@@ -500,6 +551,7 @@ mod tests {
         assert!(dashboard.get("id").is_none());
         assert!(dashboard.get("version").is_none());
         assert_eq!(dashboard["refresh"], "5s");
+        assert_eq!(dashboard["timepicker"]["refresh_intervals"][0], "5s");
         assert_eq!(dashboard["time"]["from"], "now-1h");
         assert_eq!(dashboard["tags"], json!(["x", "dashr"]));
         let ids: Vec<i64> = flat_panels(dashboard)

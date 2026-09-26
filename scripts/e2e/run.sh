@@ -14,6 +14,10 @@ DASHR_BUILT="${1:-$ROOT/target/debug/dashr}"
 WORK="$(mktemp -d)"
 export HERDR_SESSION="dashr-e2e-$$"
 PASS=0
+# Pictures of the browser pane; CI uploads this directory as an artifact.
+SHOTS="${DASHR_E2E_ARTIFACTS:-$WORK/screens}"
+mkdir -p "$SHOTS"
+shot() { python3 "$ROOT/scripts/e2e/cdp_screenshot.py" "$1" "$2" "$SHOTS/$3.png" || echo "  (screenshot $3 failed)"; }
 
 log() { printf '\033[1m== %s\033[0m\n' "$*"; }
 ok() { PASS=$((PASS + 1)); printf '  \033[32mok\033[0m %s\n' "$*"; }
@@ -567,6 +571,7 @@ EOF2
     || { python3 "$ROOT/scripts/e2e/cdp_eval.py" "$CDP" "/d/$BUID" 'document.body.innerText' | head -5; fail "Grafana did not render the dashboard"; }
   python3 "$ROOT/scripts/e2e/cdp_eval.py" "$CDP" "/d/$BUID" 'document.body.innerText' | grep -q 'unexpected error' && fail "Grafana shows an error page"
   ok "Grafana rendered the welcome dashboard in the browser pane"
+  shot "$CDP" "/d/$BUID" 1-grafana-welcome
 
   mkdir -p "$WORK/browser"
   cat >"$WORK/browser/script.json" <<'EOF2'
@@ -624,6 +629,8 @@ EOF2
   OCDP="$(terminal-browser ls --all --json | python3 -c 'import json,sys; b=[b for b in json.load(sys.stdin)["browsers"] if any("/d/'"$OBUID"'" in t["url"] for t in b["tabs"])]; print(b[0]["cdpPort"])')"
   DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" --config-dir "$OBCONF" --state-dir "$STATE_DIR" expect \
     -p 'order = order \d+ created' -a 'exception' >/dev/null || fail "dashr expect failed"
+  wait_for 30 "python3 $ROOT/scripts/e2e/cdp_eval.py $OCDP /d/$OBUID 'document.body.innerText' | grep -q waiting" || fail "expectation tiles did not appear"
+  shot "$OCDP" "/d/$OBUID" 2-otel-expectations-armed
   printf 'E2E order 1 created\nE2E exception boom\nE2E plain line\n' \
     | DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" --state-dir "$STATE_DIR" tail --service web >/dev/null
   trail_colours() {
@@ -639,6 +646,14 @@ print(colours)'
   }
   wait_for 60 trail_colours || { python3 "$ROOT/scripts/e2e/cdp_eval.py" "$OCDP" "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")"; fail "the live trail does not highlight the lines"; }
   ok "live trail in the browser pane: expected line green, forbidden line red, other lines plain ($(trail_colours))"
+  shot "$OCDP" "/d/$OBUID" 3-otel-trail-highlighted
+  # The page must pick up new lines by itself: Grafana ignores a refresh
+  # interval missing from the dashboard's allowed list (DEC-034).
+  echo 'E2E order 2 created later' | DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" --state-dir "$STATE_DIR" tail --service web >/dev/null
+  wait_for 15 "python3 $ROOT/scripts/e2e/cdp_eval.py $OCDP /d/$OBUID 'document.body.innerText' | grep -q 'E2E order 2 created later'" \
+    || fail "the dashboard did not refresh by itself"
+  shot "$OCDP" "/d/$OBUID" 4-otel-trail-live
+  ok "the browser pane refreshes by itself: a new line appeared without a reload"
   terminal-browser ls --all --json | grep -q "/d/$OBUID[^\"]*from=20[0-9-]*T" || fail "dashr expect did not move the browser to the armed time range"
   python3 "$ROOT/scripts/e2e/cdp_eval.py" "$OCDP" "/d/$OBUID" 'document.body.innerText' | grep -q 'Invalid date' && fail "time picker shows an invalid date"
   ok "dashr expect moved the browser to the armed time range"

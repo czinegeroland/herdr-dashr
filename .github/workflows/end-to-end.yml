@@ -44,3 +44,11 @@ jobs:
       - run: scripts/e2e/run.sh target/debug/dashr
         env:
           DASHR_E2E_BROWSER: "1"
+          DASHR_E2E_ARTIFACTS: ${{ github.workspace }}/e2e-screens
+      # Pictures of the running product from the browser-pane scenarios.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-screens
+          path: e2e-screens/
+          if-no-files-found: ignore
