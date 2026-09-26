@@ -1,0 +1,152 @@
+name: Publish to npm
+
+# Publishes dashr to npm after a release is created (DASHR-TECH-005).
+# Ported from herdr-remote-channel's npm pipeline.
+#
+# Triggered by the Release workflow finishing rather than by
+# `release: published`: the release is created with GITHUB_TOKEN, and GitHub
+# raises no workflow-triggering events for that token, so a `release:`
+# trigger would silently never fire.
+#
+# `build-npm-packages.mjs` verifies every archive against its published
+# SHA-256 and bundles the executables into the packages, so npm serves the
+# bytes under its own integrity hash and no install fetches from GitHub.
+#
+# Needs the NPM_TOKEN repository secret (an npm automation token).
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  # So a failed publish can be retried, or an existing release published,
+  # without cutting another one.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v0.2.0
+        required: true
+        type: string
+      dry-run:
+        description: Build and verify the packages without publishing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    # Only after a Release run that succeeded, from main (manual release) or
+    # a version tag.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        startsWith(github.event.workflow_run.head_branch, 'v')))
+    steps:
+      - name: Check out the released commit
+        uses: actions/checkout@v7
+        with:
+          # For a dispatch, the tag; for a Release run, the commit it built.
+          ref: ${{ inputs.tag || github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          registry-url: https://registry.npmjs.org
+
+      - name: Work out which release to publish
+        id: release
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A Release run releases the manifest version at its commit.
+          manifest="v$(sed -n 's/^version = "\(.*\)"$/\1/p' herdr-plugin.toml | head -n 1)"
+          tag="${INPUT_TAG:-$manifest}"
+          [ "$tag" = "$manifest" ] || { echo "tag $tag does not match manifest $manifest at that ref" >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the release archives and their checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir artifacts --pattern 'dashr-*'
+          ls -la artifacts
+
+      # Refuses a tampered or unchecksummed archive, and refuses to publish
+      # unless every supported platform is present.
+      - name: Build and verify the npm packages
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: node scripts/build-npm-packages.mjs --version "$VERSION" --artifacts artifacts --out npm-dist
+
+      - name: Check the built shim runs the bundled binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd npm-dist/herdr-dashr
+          mkdir -p node_modules
+          cp -r ../linux-x64 node_modules/herdr-dashr-linux-x64
+          test "$(node bin.js --version)" = "dashr ${{ steps.release.outputs.version }}"
+          echo "the packaged shim runs the packaged binary"
+
+      - name: Publish
+        if: ${{ !inputs.dry-run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::The NPM_TOKEN repository secret is not set; add an npm automation token and re-run (or dispatch with the tag)."
+            exit 1
+          fi
+
+          # Paths start with `./`: npm reads a bare `a/b` as GitHub shorthand.
+          publish() {
+            local dir="$1" name version
+            name="$(node -p "require('./$dir/package.json').name")"
+            version="$(node -p "require('./$dir/package.json').version")"
+            # Versions are immutable; skipping what exists makes a retry of a
+            # half-finished run work.
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published"
+              return 0
+            fi
+            # The registry answers E409 when brand-new names arrive too fast;
+            # retry with backoff, and trust the registry over the error.
+            local attempt=1 delay=20
+            while true; do
+              echo "publishing $name@$version (attempt $attempt)"
+              if npm publish --access public "./$dir"; then
+                return 0
+              fi
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "$name@$version is published despite the error"
+                return 0
+              fi
+              if [ "$attempt" -ge 6 ]; then
+                echo "giving up on $name@$version after $attempt attempts" >&2
+                return 1
+              fi
+              echo "retrying $name@$version in ${delay}s"
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+
+          # Platform packages first: the root package depends on them.
+          for dir in npm-dist/*/; do
+            [ "$(basename "$dir")" = "herdr-dashr" ] && continue
+            publish "${dir%/}"
+          done
+          publish npm-dist/herdr-dashr

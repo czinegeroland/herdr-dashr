@@ -33,6 +33,8 @@ jobs:
           shared-key: lint
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
+      # The npm packaging script and shim (DASHR-TECH-005).
+      - run: node --check scripts/build-npm-packages.mjs && node --check npm/dashr/bin.js && sh -n scripts/install.sh
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
