@@ -93,6 +93,7 @@ enabled = false
 
 [agent]
 command = ["echo", "AGENT-STARTED", "{mcp_config}"]
+skill_dirs = ["$WORK/skills"]
 
 [masking]
 testdata_personal = true
@@ -149,6 +150,11 @@ CHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("cha
 wait_for 20 "herdr pane read $CHAT --source recent | grep -q AGENT-STARTED" || fail "agent command did not run"
 herdr pane read "$CHAT" --source recent | grep -q "mcp.json" || fail "agent did not get the MCP config"
 ok "chat pane $CHAT started the agent with the MCP config"
+grep -q 'generated-by: herdr-dashr' "$WORK/skills/herdr-dashr/SKILL.md" || fail "the pane did not install the skill"
+for file in reference/dashboard-json.md reference/datasources.md reference/recipes.md; do
+  [ -s "$WORK/skills/herdr-dashr/$file" ] || fail "skill file $file missing"
+done
+ok "the dashboard pane installed the herdr-dashr skill before starting the agent"
 
 wait_for 30 "herdr pane read $PANE --source visible | grep -q 'Dashboard: http://127.0.0.1:$PORT/d/'" || fail "text view does not show the dashboard URL"
 wait_for 30 "herdr pane read $PANE --source visible | grep -q 'Heartbeat (TestData)'" || fail "text view does not list panels"
@@ -262,6 +268,43 @@ TARGET_DS="$(curl -fsS -u admin:e2e-admin "$TARGET/api/datasources/name/TestData
 curl -fsS -u admin:e2e-admin "$TARGET/api/dashboards/uid/$PROMOTED_UID" | grep -q "\"uid\":\"$TARGET_DS\"" \
   || fail "promoted dashboard does not use the target's TestData uid"
 ok "get_dashboard works; promote refuses a missing datasource, then promotes with datasources remapped by name"
+
+log "skill: MCP resources, build-step install, examples on a real Grafana"
+python3 - "$ROOT/.agents/skills/herdr-dashr/reference/dashboard-json.md" "$WORK/example.json" <<'EOF2'
+import json, sys
+text = open(sys.argv[1]).read()
+blocks = [b.split("\n```")[0] for b in text.split("```json dashr-example\n")[1:]]
+example = next(json.loads(b) for b in blocks if "dashr-testdata" in b and "prometheus" not in b)
+json.dump([
+    {"read_resource": "dashr://guide/SKILL.md"},
+    {"read_resource": "dashr://guide/reference/datasources.md"},
+    {"tool": "apply_dashboard", "arguments": {"dashboard": example}},
+    {"tool": "panel_status"},
+], open(sys.argv[2], "w"))
+EOF2
+python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$SESSION" "$WORK/example.json" >"$WORK/example.out"
+python3 - "$WORK/example.out" <<'EOF2' || fail "skill resource or example assertions failed"
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1])]
+uris = json.loads(next(l for l in lines if l["tool"] == "resources/list")["text"])
+assert "dashr://guide/SKILL.md" in uris and len(uris) == 4, uris
+reads = [l["text"] for l in lines if l["tool"] == "resources/read"]
+assert reads[0].startswith("---\nname: herdr-dashr") and "CloudWatch" in reads[1]
+init = json.loads(next(l for l in lines if l["tool"] == "initialize")["text"])
+assert "dashr://guide/SKILL.md" in init["instructions"]
+status = json.loads(next(l for l in lines if l["tool"] == "panel_status")["text"])
+states = {p["title"]: p["state"] for p in status["panels"]}
+assert states and all(state == "ok" for state in states.values()), states
+print("  example panels:", states)
+EOF2
+ok "guide served as MCP resources; the skill's TestData example renders with every panel ok"
+mkdir -p "$WORK/foreign/herdr-dashr"
+printf -- '---\nname: herdr-dashr\n---\nmy own notes\n' >"$WORK/foreign/herdr-dashr/SKILL.md"
+"$ROOT/bin/dashr" --config-dir "$CONFIG_DIR" skill install --best-effort --dir "$WORK/foreign" | grep -q 'left' || fail "foreign skill not reported"
+grep -q 'my own notes' "$WORK/foreign/herdr-dashr/SKILL.md" || fail "a skill dashr did not write was replaced"
+"$ROOT/bin/dashr" --config-dir "$CONFIG_DIR" skill install --best-effort --dir "$WORK/fresh" | grep -q 'installed' || fail "build-step install did not install"
+"$ROOT/bin/dashr" --config-dir "$CONFIG_DIR" skill install --best-effort --dir /proc/nonexistent/skills || fail "--best-effort must not fail the plugin build"
+ok "build-step install: installs fresh, never replaces a user's skill, never fails the build"
 
 log "AC-CLOSE: closing the pane removes everything"
 RUNTIME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_dir"])' "$RECORD")"

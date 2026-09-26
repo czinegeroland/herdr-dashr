@@ -3,7 +3,8 @@
 
 Usage: mcp_client.py <dashr> <state-dir> <config-dir> <session> <script.json>
 
-The script is a JSON list of {"tool": name, "arguments": {...}}. Each
+The script is a JSON list of {"tool": name, "arguments": {...}} or
+{"read_resource": uri}. The resource list is printed after tools/list. Each
 result is printed as one JSON line: {"tool", "isError", "text"}. Image
 results are saved beside the script as <script>.<tool>.<n>.png.
 """
@@ -49,7 +50,15 @@ def main() -> int:
     tools = request("tools/list")
     print(json.dumps({"tool": "tools/list", "isError": False,
                       "text": json.dumps([tool["name"] for tool in tools["tools"]])}))
+    resources = request("resources/list")
+    print(json.dumps({"tool": "resources/list", "isError": False,
+                      "text": json.dumps([r["uri"] for r in resources.get("resources", [])])}))
     for step in script:
+        if "read_resource" in step:
+            read = request("resources/read", {"uri": step["read_resource"]})
+            print(json.dumps({"tool": "resources/read", "isError": False,
+                              "text": read["contents"][0]["text"]}))
+            continue
         result = request("tools/call", {"name": step["tool"], "arguments": step.get("arguments", {})})
         text = "".join(item.get("text", "") for item in result["content"] if item["type"] == "text")
         images = [item for item in result["content"] if item["type"] == "image"]

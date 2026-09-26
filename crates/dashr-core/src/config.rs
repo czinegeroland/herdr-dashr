@@ -120,6 +120,11 @@ pub struct AgentConfig {
     pub mcp_grafana_command: String,
     /// Fraction of the tab the dashboard keeps when the chat pane splits off.
     pub split_ratio: f32,
+    /// Keep the herdr-dashr agent skill installed and current in
+    /// `skill_dirs` (DASHR-SKILL-002).
+    pub install_skill: bool,
+    /// Skill directories to install into; `~/` is expanded.
+    pub skill_dirs: Vec<String>,
 }
 
 impl Default for AgentConfig {
@@ -137,6 +142,8 @@ impl Default for AgentConfig {
             mcp_grafana: false,
             mcp_grafana_command: "mcp-grafana".to_owned(),
             split_ratio: 0.62,
+            install_skill: true,
+            skill_dirs: vec!["~/.claude/skills".to_owned()],
         }
     }
 }
@@ -431,6 +438,8 @@ enabled = true            # false: text status view instead of terminal-browser
 [agent]
 command = ["claude", "{prompt}", "--mcp-config", "{mcp_config}"]
 mcp_grafana = false       # true registers mcp-grafana; its query tools bypass masking
+install_skill = true      # keep the herdr-dashr skill installed and current
+skill_dirs = ["~/.claude/skills"]
 
 [aws]
 # profile = "dev"         # short-lived credentials are exported from this profile

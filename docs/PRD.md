@@ -9,9 +9,9 @@
 | Herdr plugin id | `herdr-dashr` |
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Draft |
-| PRD version | 0.1.0 |
-| Delivery phase | v0.1.x - browser pane verified |
-| Last updated | 2026-09-26T04:45:00Z |
+| PRD version | 0.2.0 |
+| Delivery phase | v0.2.0 - agent skill |
+| Last updated | 2026-09-26T05:30:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -139,6 +139,7 @@ Crates:
 | M1 | Libraries: core, Grafana client, Docker lifecycle, Herdr wrapper, AWS bootstrap, runtime, MCP server. |
 | M2 | `dashr` binary and Herdr wiring: manifest, actions, panes, hooks, install. |
 | M3 | End-to-end suite against real Herdr and Grafana in CI; releases. |
+| M4 | Agent skill for dynamic dashboard building (v0.2.0). |
 
 ## 8. Functional requirements
 
@@ -264,6 +265,15 @@ Crates:
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
 | DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Verified | Release v0.1.0 by `.github/workflows/release.yml`: 4 targets, each with a `.sha256` |
 
+### 8.12 Agent skill (SKILL)
+
+| ID | Requirement | Priority | Status | Evidence |
+|---|---|---|---|---|
+| DASHR-SKILL-001 | The plugin ships a dashboard-building agent skill — the loop from question to verified dashboard, privacy rules, dashboard JSON, query models for every supported datasource, debugging recipes — embedded in the binary. | Must | Verified | `.agents/skills/herdr-dashr/`; `dashr_runtime::skill::FILES`; `skill_carries_the_marker_and_frontmatter` |
+| DASHR-SKILL-002 | The plugin's build step installs the skill for Claude Code, and the dashboard pane refreshes it before the agent starts; neither ever replaces or removes a skill dashr did not write, and the build step never fails the install. | Must | Verified | `herdr-plugin.toml` build step; `install_refresh_and_uninstall_respect_ownership`; skill scenario and AC-OPEN skill check in `scripts/e2e/run.sh` |
+| DASHR-SKILL-003 | The same guide is served as MCP resources (`dashr://guide/...`) and named in the server instructions, so agents without skill support get it too. | Should | Verified | `resources_are_listed_and_read`, `resources_map_to_files`; skill scenario in `scripts/e2e/run.sh` |
+| DASHR-SKILL-004 | Every example dashboard and query-model snippet in the skill is valid: examples pass dashr's validation, snippets parse, and the TestData example renders with every panel `ok` on a real Grafana. | Must | Verified | `every_dashboard_example_is_valid`, `every_query_model_snippet_is_json`; skill scenario in `scripts/e2e/run.sh` |
+
 ## 9. Security requirements
 
 | ID | Requirement | Status | Evidence |
@@ -324,6 +334,7 @@ Crates:
 | DEC-024 | Reload and screenshot drive terminal-browser's Chromium directly over the DevTools protocol (port from `terminal-browser ls --json`, loopback websocket only). `terminal-browser action` goes through agent-browser, which forgets its CDP attachment after one command and tries to launch its own Chrome (terminal-browser 0.11.1, agent-browser 0.33.0). |
 | DEC-025 | The browser process gets `LANG=en_US.UTF-8` when the environment's locale is missing, C or POSIX: Chromium then reports language `c` and Grafana replaces the dashboard with "An unexpected error happened" (`RangeError: Invalid language tag: c`). Found by the browser-pane scenario. |
 | DEC-026 | Runtime directories under shared bases (`/dev/shm`, `/tmp`) are `herdr-dashr-<user>`: the first user's 0700 `herdr-dashr` locked other users out and pushed them to disk. |
+| DEC-027 | The skill is embedded in the binary and installed by a plugin build step (`bin/dashr skill install --best-effort`) plus a refresh from the dashboard pane, and served as MCP resources. The build step pins the skill to the binary that serves its tools; ownership is marked in `SKILL.md` so user skills are never overwritten. The plugin version moves to 0.2.0 because the build step needs a binary that has `skill install`. |
 
 ## 13. Open questions and risks
 
@@ -348,6 +359,7 @@ Crates:
 | 2026-09-26 | Release workflow can create its own tag from a manual run; Intel macOS build on `macos-15-intel`; evidence recorded for governance, AWS, alert and skill rows; terminal-browser limitation recorded (OQ-007). | TECH-004, CHAT-002, AWS-005/006, ALERT-003, GOV-001..003, TECH-002, SEC-005/007, VIEW-001/002/004 |
 | 2026-09-26 | v0.1.0 released (4 targets, checksummed). Verified a GitHub install with no Rust toolchain. Only the terminal-browser rows remain `Implemented`, pending a manual check in a kitty-graphics terminal (OQ-007). | HERDR-006, TECH-004 |
 | 2026-09-26 | Browser pane verified end to end: a pty that answers kitty graphics queries lets CI run terminal-browser against the real Grafana. Reload and screenshot moved to direct CDP (DEC-024); fixed the Grafana crash under the C locale (DEC-025) and per-user runtime dirs (DEC-026). | VIEW-001/002/004, MCP-010, GRAF-004, SEC-005 |
+| 2026-09-26 | v0.2.0: dashboard-building agent skill (loop, privacy rules, dashboard JSON, per-datasource query models, recipes), installed by the plugin build step and refreshed by the pane, served as MCP resources; examples validated by tests and on a real Grafana. | SKILL-001..004 |
 
 ### Requirement completion summary
 
@@ -363,9 +375,10 @@ Crates:
 | AWS | 6 | 6 | 0 | 0 |
 | ALERT | 4 | 4 | 0 | 0 |
 | PROMO | 3 | 3 | 0 | 0 |
+| SKILL | 4 | 4 | 0 | 0 |
 | GOV/TECH | 7 | 7 | 0 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 75 | 75 | 0 | 0 |
+| **All** | 79 | 79 | 0 | 0 |
 
 ## 15. Acceptance criteria
 

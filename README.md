@@ -19,11 +19,8 @@ agent underneath to reshape it.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.1.0. 70 of 75 requirements verified, most by an end-to-end
-suite that runs a real Herdr and a real Grafana in CI. The terminal-browser
-view is implemented but has not yet been checked by hand in a kitty-graphics
-terminal (PRD OQ-007); without it the pane shows a text status view.
-terminal-browser refuses to run as root.
+**Status:** v0.2.0. All 79 PRD requirements verified, most by an end-to-end
+suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
 
 ## Install
 
@@ -33,7 +30,7 @@ herdr plugin install czinegeroland/herdr-dashr
 
 The build step downloads the release binary for your platform and verifies
 its SHA-256; it builds with `cargo` only when no release exists. You need
-Docker. terminal-browser (for the real Grafana UI), Claude Code (the chat
+Docker. terminal-browser (for the real Grafana UI; it refuses to run as root), Claude Code (the chat
 pane) and the AWS CLI (CodePipeline, CloudWatch) are optional — run the
 **Check dashr prerequisites** action to see what is missing.
 
@@ -53,8 +50,26 @@ browser profile are deleted. The sidebar token `$dashr` shows panel health
 The agent gets these MCP tools: `list_datasources`, `probe_query`,
 `apply_dashboard`, `panel_status`, `panel_data_sample`, `get_dashboard`,
 `watch_panel`, `list_watches`, `remove_watch`, `screenshot` (non-personal
-dashboards only), `open_for_pipeline`, `promote`. Install the matching agent
-skill with `bin/dashr skill install`.
+dashboards only), `open_for_pipeline`, `promote`.
+
+## The agent skill
+
+The plugin installs a **herdr-dashr skill** for Claude Code
+(`~/.claude/skills/herdr-dashr/`) that teaches the agent to build dashboards
+dynamically: turn the human's question into panels, probe the data, apply,
+verify with `panel_status`, and keep evolving the dashboard as the
+conversation goes. It carries dashboard-JSON rules, query models for every
+supported datasource (Prometheus, Loki, Tempo, CloudWatch, SQL Server, Azure
+Monitor, Zabbix, Seq, TestData) and debugging recipes (deploys, queue
+backlogs, Step Functions failures, error spikes, latency).
+
+- Installed by the plugin's build step, refreshed by the dashboard pane when
+  the binary is newer. A skill of the same name that you wrote is never
+  replaced (`--force` to override).
+- Also served as MCP resources (`dashr://guide/...`), so any MCP agent gets it.
+- `dashr skill files`, `dashr skill print reference/recipes.md`,
+  `dashr skill install --dir <skills-dir>`, `dashr skill uninstall`.
+- Configure with `agent.install_skill` and `agent.skill_dirs` in `dashr.toml`.
 
 ## Configure
 
