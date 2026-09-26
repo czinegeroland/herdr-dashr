@@ -103,6 +103,26 @@ jobs:
           test "$(node bin.js --version)" = "dashr ${{ steps.release.outputs.version }}"
           echo "the packaged shim runs the packaged binary"
 
+      # Runs in dry runs too, so a token can be checked without publishing.
+      # npm answers a publish it refuses with "404 Not Found", which says
+      # nothing about the token; this names the account and fails clearly.
+      - name: Check the npm token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            if [ "${{ inputs.dry-run }}" = true ]; then echo "NPM_TOKEN not set (dry run)"; exit 0; fi
+            echo "::error::The NPM_TOKEN repository secret is not set; add an npm token and re-run (or dispatch with the tag)."
+            exit 1
+          fi
+          if ! user="$(npm whoami 2>/dev/null)"; then
+            echo "::error::npm rejects NPM_TOKEN (npm whoami failed): it is revoked, expired or mistyped. Create a granular access token with Read and write on All packages (new packages cannot be created with a token limited to selected packages), allowed to bypass 2FA, and store it as NPM_TOKEN."
+            exit 1
+          fi
+          echo "NPM_TOKEN authenticates as $user"
+
       - name: Publish
         if: ${{ !inputs.dry-run }}
         env:
@@ -128,11 +148,18 @@ jobs:
             fi
             # The registry answers E409 when brand-new names arrive too fast;
             # retry with backoff, and trust the registry over the error.
-            local attempt=1 delay=20
+            local attempt=1 delay=20 log
+            log="$(mktemp)"
             while true; do
               echo "publishing $name@$version (attempt $attempt)"
-              if npm publish --access public "./$dir"; then
+              if npm publish --access public "./$dir" 2>&1 | tee "$log"; [ "${PIPESTATUS[0]}" -eq 0 ]; then
                 return 0
+              fi
+              # Permission errors do not heal with time: npm reports a
+              # refused publish of a new package as E404.
+              if grep -qE 'code (E404|E401|E403|EOTP)' "$log"; then
+                echo "::error::npm refused $name@$version ($(grep -oE 'code E[A-Z0-9]+' "$log" | head -n 1)). The token authenticates but may not create or write this package: it needs Read and write on All packages (not selected packages) and must be allowed to bypass 2FA; the name must not belong to someone else."
+                return 1
               fi
               if npm view "$name@$version" version >/dev/null 2>&1; then
                 echo "$name@$version is published despite the error"
