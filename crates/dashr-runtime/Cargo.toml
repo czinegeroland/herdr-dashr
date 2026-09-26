@@ -1,0 +1,25 @@
+[package]
+name = "dashr-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+dashr-core.workspace = true
+dashr-grafana.workspace = true
+dashr-docker.workspace = true
+dashr-herdr.workspace = true
+dashr-aws.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+signal-hook.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

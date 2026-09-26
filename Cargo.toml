@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/dashr-core",
+    "crates/dashr-grafana",
+    "crates/dashr-docker",
+    "crates/dashr-herdr",
+    "crates/dashr-aws",
+    "crates/dashr-runtime",
+    "crates/dashr-mcp",
+    "crates/dashr-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/czinegeroland/herdr-dashr"
+
+[workspace.dependencies]
+dashr-core = { path = "crates/dashr-core" }
+dashr-grafana = { path = "crates/dashr-grafana" }
+dashr-docker = { path = "crates/dashr-docker" }
+dashr-herdr = { path = "crates/dashr-herdr" }
+dashr-aws = { path = "crates/dashr-aws" }
+dashr-runtime = { path = "crates/dashr-runtime" }
+dashr-mcp = { path = "crates/dashr-mcp" }
+
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+regex = "1"
+thiserror = "2"
+# Blocking HTTP: the plugin talks to one local Grafana and, on promote, one
+# remote one. An async runtime would buy nothing here (decision DEC-007).
+ureq = { version = "2", features = ["json"] }
+signal-hook = "0.3"
+base64 = "0.22"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
