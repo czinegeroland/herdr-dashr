@@ -19,7 +19,7 @@ agent underneath to reshape it.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.2.0. All 79 PRD requirements verified, most by an end-to-end
+**Status:** v0.2.0. 79 of 80 PRD requirements verified (npm publishing awaits its token), most by an end-to-end
 suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
 
 ## Install
@@ -28,11 +28,25 @@ suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
 herdr plugin install czinegeroland/herdr-dashr
 ```
 
-The build step downloads the release binary for your platform and verifies
-its SHA-256; it builds with `cargo` only when no release exists. You need
+The build step installs the prebuilt `dashr` binary for your platform — from
+npm (`herdr-dashr`), whose platform packages were verified against the
+release's SHA-256 before they were packed; failing that from the GitHub
+release, verified the same way; and only as a last resort with `cargo`. No
+Rust toolchain is needed. `DASHR_INSTALL_SOURCE=npm|github|source` forces one. You need
 Docker. terminal-browser (for the real Grafana UI; it refuses to run as root), Claude Code (the chat
 pane) and the AWS CLI (CodePipeline, CloudWatch) are optional — run the
 **Check dashr prerequisites** action to see what is missing.
+
+### The CLI on its own
+
+```bash
+npx herdr-dashr@latest --version
+npm install -g herdr-dashr    # installs the `dashr` command
+```
+
+One npm package per platform carries the executable; npm installs only the
+one that runs on your machine, with no postinstall script and no download
+from GitHub.
 
 ## Use
 
@@ -97,6 +111,13 @@ cargo test --workspace
 cargo build && mkdir -p bin && cp target/debug/dashr bin/ && herdr plugin link "$PWD"
 scripts/e2e/run.sh            # real Herdr + real Grafana; needs Docker
 ```
+
+Releases: dispatch the **Release** workflow from `main`; it builds the four
+platform archives with checksums and creates the `v<version>` tag. **Publish to
+npm** then runs automatically: it verifies every archive, builds the packages
+(`scripts/build-npm-packages.mjs`) and publishes them. It needs an
+`NPM_TOKEN` repository secret (an npm automation token); it can be re-run for
+any tag with a dry-run option.
 
 ## License
 

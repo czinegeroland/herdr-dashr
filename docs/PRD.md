@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.2.0 |
 | Delivery phase | v0.2.0 - agent skill |
-| Last updated | 2026-09-26T05:30:00Z |
+| Last updated | 2026-09-26T06:30:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -152,7 +152,7 @@ Crates:
 | DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Verified | AC-PIPELINE in `scripts/e2e/run.sh`; `link_pattern_matches_both_consoles` |
 | DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Verified | Startup reaper scenario in `scripts/e2e/run.sh` |
 | DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
-| DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step downloads a checksum-verified release binary, falling back to `cargo` only when no release exists. | Must | Verified | `herdr plugin install czinegeroland/herdr-dashr` with no cargo on PATH installed `bin/dashr` 0.1.0 via `scripts/install.sh` (release v0.1.0) |
+| DASHR-HERDR-006 | Installing needs no Rust toolchain: the build step installs the prebuilt binary from npm, else the checksum-verified GitHub release, falling back to `cargo` only when neither exists. | Must | Verified | `scripts/install.sh` (npm → GitHub release → cargo); v0.2.0 installed with no cargo on PATH from the GitHub release and, against a local registry, from npm |
 | DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
 | DASHR-HERDR-008 | The plugin declares and supports Linux and macOS. | Must | Verified | Manifest `platforms`; tests on both in `.github/workflows/build-and-test.yml`; v0.1.0 binaries for x86_64/aarch64 Linux and macOS; e2e on Linux |
 | DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
@@ -264,6 +264,7 @@ Crates:
 | DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
 | DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
 | DASHR-TECH-004 | Tagged releases publish Linux and macOS binaries with SHA-256 checksums. | Must | Verified | Release v0.1.0 by `.github/workflows/release.yml`: 4 targets, each with a `.sha256` |
+| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | `.github/workflows/npm-publish.yml`, `scripts/build-npm-packages.mjs`, `npm/dashr/bin.js`; `crates/dashr-cli/tests/distribution.rs`; publish, idempotent re-publish, `install.sh` and `npx` verified against a local registry with the v0.2.0 archives; first real publish needs `NPM_TOKEN` (OQ-008) |
 
 ### 8.12 Agent skill (SKILL)
 
@@ -335,6 +336,7 @@ Crates:
 | DEC-025 | The browser process gets `LANG=en_US.UTF-8` when the environment's locale is missing, C or POSIX: Chromium then reports language `c` and Grafana replaces the dashboard with "An unexpected error happened" (`RangeError: Invalid language tag: c`). Found by the browser-pane scenario. |
 | DEC-026 | Runtime directories under shared bases (`/dev/shm`, `/tmp`) are `herdr-dashr-<user>`: the first user's 0700 `herdr-dashr` locked other users out and pushed them to disk. |
 | DEC-027 | The skill is embedded in the binary and installed by a plugin build step (`bin/dashr skill install --best-effort`) plus a refresh from the dashboard pane, and served as MCP resources. The build step pins the skill to the binary that serves its tools; ownership is marked in `SKILL.md` so user skills are never overwritten. The plugin version moves to 0.2.0 because the build step needs a binary that has `skill install`. |
+| DEC-028 | npm distribution follows herdr-remote-channel: per-platform packages with the verified binary inside, a `bin.js` shim, a publish workflow triggered by the Release workflow. Unlike herdr-remote-channel, the plugin manifest keeps running `bin/dashr`: `install.sh` takes the binary from npm when it can and falls back to the GitHub release, so the plugin needs no Node at run time and installs keep working before a version reaches npm. |
 
 ## 13. Open questions and risks
 
@@ -347,6 +349,7 @@ Crates:
 | OQ-005 | macOS input helper of terminal-browser may need accessibility permission on managed machines. |
 | OQ-006 | CloudWatch Live Tail and Loki tail are not Grafana-native streams; panels refresh on an interval instead. |
 | OQ-007 | Resolved: terminal-browser refuses root and needs a kitty-graphics terminal; CI runs it as the non-root runner inside `scripts/e2e/kitty_term.py`, which answers the graphics probe and counts frames. Real terminals (Ghostty, kitty, WezTerm, iTerm2) remain subject to OQ-001. |
+| OQ-008 | Publishing to npm needs the `NPM_TOKEN` repository secret. Until it is set, Publish to npm fails with a message saying so and installs use the GitHub release. |
 
 ## 14. Delivery ledger
 
@@ -360,6 +363,7 @@ Crates:
 | 2026-09-26 | v0.1.0 released (4 targets, checksummed). Verified a GitHub install with no Rust toolchain. Only the terminal-browser rows remain `Implemented`, pending a manual check in a kitty-graphics terminal (OQ-007). | HERDR-006, TECH-004 |
 | 2026-09-26 | Browser pane verified end to end: a pty that answers kitty graphics queries lets CI run terminal-browser against the real Grafana. Reload and screenshot moved to direct CDP (DEC-024); fixed the Grafana crash under the C locale (DEC-025) and per-user runtime dirs (DEC-026). | VIEW-001/002/004, MCP-010, GRAF-004, SEC-005 |
 | 2026-09-26 | v0.2.0: dashboard-building agent skill (loop, privacy rules, dashboard JSON, per-datasource query models, recipes), installed by the plugin build step and refreshed by the pane, served as MCP resources; examples validated by tests and on a real Grafana. | SKILL-001..004 |
+| 2026-09-26 | npm distribution ported from herdr-remote-channel: `herdr-dashr` and four platform packages, verified packaging, publish workflow after Release; `install.sh` prefers npm and falls back to the GitHub release. | TECH-005, HERDR-006 |
 
 ### Requirement completion summary
 
@@ -376,9 +380,9 @@ Crates:
 | ALERT | 4 | 4 | 0 | 0 |
 | PROMO | 3 | 3 | 0 | 0 |
 | SKILL | 4 | 4 | 0 | 0 |
-| GOV/TECH | 7 | 7 | 0 | 0 |
+| GOV/TECH | 8 | 7 | 1 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 79 | 79 | 0 | 0 |
+| **All** | 80 | 79 | 1 | 0 |
 
 ## 15. Acceptance criteria
 
