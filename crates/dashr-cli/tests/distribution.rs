@@ -18,7 +18,7 @@ fn triples(text: &str) -> BTreeSet<String> {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
         .filter(|word| {
             (word.starts_with("x86_64-") || word.starts_with("aarch64-"))
-                && (word.ends_with("-gnu") || word.ends_with("-darwin"))
+                && (word.ends_with("-gnu") || word.ends_with("-darwin") || word.ends_with("-msvc"))
         })
         .map(str::to_owned)
         .collect()
@@ -28,7 +28,9 @@ fn triples(text: &str) -> BTreeSet<String> {
 fn suffixes(text: &str) -> BTreeSet<String> {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
         .filter(|word| {
-            ["linux-", "darwin-"].iter().any(|os| word.starts_with(os))
+            ["linux-", "darwin-", "win32-"]
+                .iter()
+                .any(|os| word.starts_with(os))
                 && (word.ends_with("-x64") || word.ends_with("-arm64"))
         })
         .map(str::to_owned)
@@ -42,18 +44,30 @@ fn release_packaging_shim_and_installer_list_the_same_platforms() {
     let installer = read("scripts/install.sh");
     let shim = read("npm/dashr/bin.js");
 
-    assert_eq!(release.len(), 4, "release matrix: {release:?}");
+    assert_eq!(release.len(), 5, "release matrix: {release:?}");
     assert_eq!(
         triples(&packaging),
         release,
         "build-npm-packages.mjs targets"
     );
-    assert_eq!(triples(&installer), release, "install.sh targets");
+    // install.sh is the Unix standalone installer; the plugin installs
+    // through npm on every platform (DEC-038).
+    let unix: BTreeSet<String> = release
+        .iter()
+        .filter(|t| !t.ends_with("-msvc"))
+        .cloned()
+        .collect();
+    assert_eq!(triples(&installer), unix, "install.sh targets");
 
     let npm = suffixes(&packaging);
-    assert_eq!(npm.len(), 4, "npm suffixes: {npm:?}");
+    assert_eq!(npm.len(), 5, "npm suffixes: {npm:?}");
     assert_eq!(suffixes(&shim), npm, "bin.js PACKAGES");
-    assert_eq!(suffixes(&installer), npm, "install.sh SUFFIX values");
+    let unix_npm: BTreeSet<String> = npm
+        .iter()
+        .filter(|s| !s.starts_with("win32-"))
+        .cloned()
+        .collect();
+    assert_eq!(suffixes(&installer), unix_npm, "install.sh SUFFIX values");
 }
 
 #[test]
@@ -67,7 +81,9 @@ fn package_names_and_archive_names_match_the_release() {
     assert!(installer.contains("herdr-dashr-$SUFFIX/dashr"));
     // The archive name the release writes is the one both consumers read.
     assert!(release.contains(r#"archive="dashr-${VERSION}-${{ matrix.target }}.tar.gz""#));
-    assert!(packaging.contains("`dashr-${version}-${platform.target}.tar.gz`"));
+    assert!(release.contains(r#"archive="dashr-${VERSION}-${{ matrix.target }}.zip""#));
+    assert!(packaging.contains("`dashr-${version}-${platform.target}${platform.ext}`"));
+    assert!(packaging.contains("ext: '.zip', binary: 'dashr.exe'"));
     assert!(installer.contains(r#"archive="dashr-${VERSION}-${TARGET}.tar.gz""#));
 }
 

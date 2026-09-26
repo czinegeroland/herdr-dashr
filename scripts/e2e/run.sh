@@ -54,6 +54,11 @@ docker pull -q grafana/grafana:12.1.1 >/dev/null
 docker pull -q grafana/otel-lgtm:0.34.0 >/dev/null
 mkdir -p "$ROOT/bin"
 install -m 0755 "$DASHR_BUILT" "$ROOT/bin/dashr"
+# The manifest runs `node node_modules/herdr-dashr/bin.js` (DEC-038). A linked
+# checkout gets the launcher from npm/dashr, which runs the build in bin/.
+mkdir -p "$ROOT/node_modules"
+ln -sfn ../npm/dashr "$ROOT/node_modules/herdr-dashr"
+[ "$(node "$ROOT/node_modules/herdr-dashr/bin.js" --version)" = "$("$ROOT/bin/dashr" --version)" ] || fail "the launcher does not run the build under test"
 ok "herdr, docker and dashr ready"
 
 log "persistent Grafana for promote"

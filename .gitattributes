@@ -1,0 +1,5 @@
+# LF everywhere, on every platform. Tests compare checked-in files byte for
+# byte (herdr-plugin.toml against the generator, the skill examples), and
+# Git for Windows would otherwise check them out with CRLF.
+* text=auto eol=lf
+*.png binary

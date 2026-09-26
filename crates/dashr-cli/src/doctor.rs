@@ -142,7 +142,7 @@ pub fn pane(paths: &Paths) -> Result<()> {
     result.map(|_| ())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))] // uses `sh`
 mod tests {
     use super::*;
 

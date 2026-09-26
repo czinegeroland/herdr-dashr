@@ -26,23 +26,30 @@ agent underneath to reshape it.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.1.0, the first public release, on GitHub and npm. Every PRD requirement verified, most by an end-to-end
+**Status:** v0.1.1, on GitHub and npm, for Linux, macOS and Windows. Windows support is new; everything else is verified, most by an end-to-end
 suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
 
 ## Install
+
+Linux, macOS and Windows:
 
 ```bash
 herdr plugin install czinegeroland/herdr-dashr
 ```
 
-The build step installs the prebuilt `dashr` binary for your platform — from
-npm (`herdr-dashr`), whose platform packages were verified against the
-release's SHA-256 before they were packed; failing that from the GitHub
-release, verified the same way; and only as a last resort with `cargo`. No
-Rust toolchain is needed. `DASHR_INSTALL_SOURCE=npm|github|source` forces one. You need
-Docker. terminal-browser (for the real Grafana UI; it refuses to run as root), Claude Code (the chat
-pane) and the AWS CLI (CodePipeline, CloudWatch) are optional — run the
-**Check dashr prerequisites** action to see what is missing.
+The build step runs `npm install herdr-dashr@<version>` in the plugin
+directory, as herdr-remote-channel does: npm installs the one platform
+package whose prebuilt `dashr` matches your machine (verified against the
+release's SHA-256 before it was packed), and every Herdr entry point runs it
+through `node node_modules/herdr-dashr/bin.js`. You need Node.js 18+ and
+Docker; no Rust toolchain. terminal-browser (for the real Grafana UI; it
+refuses to run as root), Claude Code (the chat pane) and the AWS CLI
+(CodePipeline, CloudWatch) are optional — run the **Check dashr
+prerequisites** action to see what is missing.
+
+On Windows, Docker Desktop must be running, and the chat pane's shell is
+PowerShell. Without terminal-browser the dashboard pane shows the Grafana URL;
+Ctrl-click it to open Grafana in your browser.
 
 ### The CLI on its own
 

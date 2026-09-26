@@ -38,13 +38,14 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
-    # Linux and macOS: the platforms the plugin declares (DASHR-HERDR-008).
+    # Linux, macOS and Windows: the platforms the plugin declares
+    # (DASHR-HERDR-008).
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - name: Install the pinned toolchain

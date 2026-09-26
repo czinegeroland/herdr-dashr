@@ -26,6 +26,8 @@ jobs:
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
           - { target: x86_64-apple-darwin, os: macos-15-intel }
           - { target: aarch64-apple-darwin, os: macos-latest }
+          # As herdr-remote-channel: a native MSVC build, shipped as a .zip.
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
     steps:
       - uses: actions/checkout@v7
       - name: Install the pinned toolchain
@@ -45,16 +47,27 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - run: cargo build --release --locked --bin dashr
       - name: Package
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           archive="dashr-${VERSION}-${{ matrix.target }}.tar.gz"
           tar -czf "$archive" -C target/release dashr
           if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
           ./target/release/dashr --version
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          archive="dashr-${VERSION}-${{ matrix.target }}.zip"
+          powershell -NoProfile -Command "Compress-Archive -Path target/release/dashr.exe -DestinationPath $archive"
+          sha256sum "$archive" > "$archive.sha256"
+          ./target/release/dashr.exe --version
       - uses: actions/upload-artifact@v7
         with:
           name: dashr-${{ matrix.target }}
-          path: dashr-*.tar.gz*
+          path: |
+            dashr-*.tar.gz*
+            dashr-*.zip*
 
   publish:
     name: Publish

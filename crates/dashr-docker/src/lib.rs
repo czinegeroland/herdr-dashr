@@ -522,14 +522,21 @@ mod tests {
         assert!(has_pair(
             &args,
             "-v",
-            &format!("/dev/shm/dashr/x/provisioning/tempo.yaml:{OTEL_TEMPO_CONFIG_FILE}:ro")
+            &format!(
+                "{}:{OTEL_TEMPO_CONFIG_FILE}:ro",
+                otel.provisioning_dir.join(TEMPO_CONFIG_NAME).display()
+            )
         ));
         assert!(OTEL_TEMPO_CONFIG.contains("query_end_cutoff: 1s"));
         assert!(has_pair(
             &args,
             "-v",
             &format!(
-                "/dev/shm/dashr/x/provisioning/datasources/dashr.yaml:{OTEL_PROVISIONING_FILE}:ro"
+                "{}:{OTEL_PROVISIONING_FILE}:ro",
+                otel.provisioning_dir
+                    .join("datasources")
+                    .join("dashr.yaml")
+                    .display()
             )
         ));
         assert!(has_pair(&args, "-e", "GF_PLUGINS_PREINSTALL_DISABLED=true"));
