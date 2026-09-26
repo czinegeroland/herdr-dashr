@@ -124,7 +124,17 @@ pub fn cdp_call(websocket: &str, method: &str, params: Value) -> Result<Value, B
         .send(tungstenite::Message::text(request.to_string()))
         .map_err(|error| failed(method, error))?;
     loop {
-        let message = socket.read().map_err(|error| failed(method, error))?;
+        let message = match socket.read() {
+            Ok(message) => message,
+            // A signal (the pane installs handlers for SIGHUP and friends)
+            // interrupts the blocking read; that is not a failure.
+            Err(tungstenite::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                continue;
+            }
+            Err(error) => return Err(failed(method, error)),
+        };
         let tungstenite::Message::Text(text) = message else {
             continue;
         };
