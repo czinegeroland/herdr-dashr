@@ -255,67 +255,6 @@ pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn record(session: &str, pane: &str, socket: &str) -> SessionRecord {
-        serde_json::from_value(json!({
-            "session_id": session, "pane_id": pane, "socket_hash": socket,
-            "container": "c", "port": 1, "runtime_dir": "/tmp/r",
-            "dashboard_uid": "d", "refresh": "5s", "datasources": [], "started_unix": 0
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn a_session_is_named_by_its_id_or_its_dashboard_pane() {
-        let records = [
-            record("a-w1-p2", "w1:p2", "s1"),
-            record("b-w1-p2", "w1:p2", "s2"),
-        ];
-        let ids = |found: Vec<&SessionRecord>| {
-            found
-                .into_iter()
-                .map(|r| r.session_id.clone())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(ids(matching(&records, "b-w1-p2", Some("s1"))), ["b-w1-p2"]);
-        // A pane id only names a session of the caller's Herdr server.
-        assert_eq!(ids(matching(&records, "w1:p2", Some("s1"))), ["a-w1-p2"]);
-        assert_eq!(matching(&records, "w1:p2", None).len(), 2);
-        assert!(matching(&records, "w9:p9", Some("s1")).is_empty());
-    }
-
-    #[test]
-    fn ready_carries_the_briefing_and_no_grafana_address() {
-        let out = ready(&record("a-w1-p2", "w1:p2", "s1"), "brief text");
-        assert_eq!(out["session"], "a-w1-p2");
-        assert_eq!(out["pane"], "w1:p2");
-        assert_eq!(out["brief"], "brief text");
-        // The agent never needs Grafana's address; the skill forbids using it.
-        assert!(!out.to_string().contains("127.0.0.1"));
-    }
-
-    #[test]
-    fn arguments_must_be_a_json_object() {
-        assert_eq!(arguments(None, None).unwrap(), json!({}));
-        assert_eq!(
-            arguments(Some(r#"{"expr": "up"}"#), None).unwrap(),
-            json!({"expr": "up"})
-        );
-        assert!(arguments(Some("[1]"), None).is_err());
-        assert!(arguments(Some("{"), None).is_err());
-    }
-
-    #[test]
-    fn base64_round_trips_png_bytes() {
-        assert_eq!(decode_base64("iVBORw0KGgo=").unwrap(), b"\x89PNG\r\n\x1a\n");
-        assert_eq!(decode_base64("aGk").unwrap(), b"hi");
-        assert!(decode_base64("a*b").is_none());
-    }
-}
-
 /// `dashr discover`.
 pub fn discover() -> Result<()> {
     let cwd = std::env::var(crate::herdr_cmds::ORIGIN_CWD_ENV)
@@ -414,4 +353,65 @@ pub fn collect(paths: &Paths, session: Option<&str>, command: crate::CollectComm
         "trial": trial,
         "note": "The dashboard pane now collects this every few seconds; query the metric names above in panels (Prometheus datasource) and the service's logs in Loki."
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(session: &str, pane: &str, socket: &str) -> SessionRecord {
+        serde_json::from_value(json!({
+            "session_id": session, "pane_id": pane, "socket_hash": socket,
+            "container": "c", "port": 1, "runtime_dir": "/tmp/r",
+            "dashboard_uid": "d", "refresh": "5s", "datasources": [], "started_unix": 0
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_session_is_named_by_its_id_or_its_dashboard_pane() {
+        let records = [
+            record("a-w1-p2", "w1:p2", "s1"),
+            record("b-w1-p2", "w1:p2", "s2"),
+        ];
+        let ids = |found: Vec<&SessionRecord>| {
+            found
+                .into_iter()
+                .map(|r| r.session_id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(matching(&records, "b-w1-p2", Some("s1"))), ["b-w1-p2"]);
+        // A pane id only names a session of the caller's Herdr server.
+        assert_eq!(ids(matching(&records, "w1:p2", Some("s1"))), ["a-w1-p2"]);
+        assert_eq!(matching(&records, "w1:p2", None).len(), 2);
+        assert!(matching(&records, "w9:p9", Some("s1")).is_empty());
+    }
+
+    #[test]
+    fn ready_carries_the_briefing_and_no_grafana_address() {
+        let out = ready(&record("a-w1-p2", "w1:p2", "s1"), "brief text");
+        assert_eq!(out["session"], "a-w1-p2");
+        assert_eq!(out["pane"], "w1:p2");
+        assert_eq!(out["brief"], "brief text");
+        // The agent never needs Grafana's address; the skill forbids using it.
+        assert!(!out.to_string().contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn arguments_must_be_a_json_object() {
+        assert_eq!(arguments(None, None).unwrap(), json!({}));
+        assert_eq!(
+            arguments(Some(r#"{"expr": "up"}"#), None).unwrap(),
+            json!({"expr": "up"})
+        );
+        assert!(arguments(Some("[1]"), None).is_err());
+        assert!(arguments(Some("{"), None).is_err());
+    }
+
+    #[test]
+    fn base64_round_trips_png_bytes() {
+        assert_eq!(decode_base64("iVBORw0KGgo=").unwrap(), b"\x89PNG\r\n\x1a\n");
+        assert_eq!(decode_base64("aGk").unwrap(), b"hi");
+        assert!(decode_base64("a*b").is_none());
+    }
 }

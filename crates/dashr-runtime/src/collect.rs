@@ -400,7 +400,7 @@ impl Sampler {
             .get_or_insert_with(sysinfo::Networks::new_with_refreshed_list);
         networks.refresh(true);
         let (mut rx, mut tx) = (0.0, 0.0);
-        for (_, data) in networks.list() {
+        for data in networks.list().values() {
             rx += data.received() as f64;
             tx += data.transmitted() as f64;
         }
