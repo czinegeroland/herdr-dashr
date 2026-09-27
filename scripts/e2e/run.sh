@@ -6,7 +6,7 @@
 #   scripts/e2e/run.sh [path/to/dashr]
 #
 # Acceptance criteria covered: AC-OPEN, AC-MASK, AC-ALERT, AC-CLOSE,
-# AC-PIPELINE, AC-AGENT, AC-OTEL, AC-LOGX, AC-LIB, plus the startup reaper.
+# AC-PIPELINE, AC-AGENT, AC-OTEL, AC-LOGX, AC-COLLECT, AC-LIB, plus the startup reaper.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -26,7 +26,7 @@ fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
 cleanup() {
   herdr server stop >/dev/null 2>&1 || true
   docker ps -q --filter label=herdr.dashr=1 | xargs -r docker rm -f >/dev/null 2>&1 || true
-  docker rm -f dashr-e2e-orphan dashr-e2e-foreign dashr-e2e-target >/dev/null 2>&1 || true
+  docker rm -f dashr-e2e-orphan dashr-e2e-foreign dashr-e2e-target dashr-e2e-app dashr-e2e-pg >/dev/null 2>&1 || true
   [ -n "${STANDALONE_STATE:-}" ] && "$ROOT/bin/dashr" --state-dir "$STANDALONE_STATE" --config-dir "$STANDALONE_CONFIG" session stop local-image >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
@@ -159,7 +159,7 @@ EOF
 ok "container read-only, tmpfs, no logs, no swap, no capabilities, loopback-only"
 
 wait_for 30 "grep -q '\"chat_pane\": \"' $RECORD" \
-  || { herdr pane read "$PANE" --source recent | tail -30; fail "chat pane not recorded"; }
+  || { herdr pane read "$PANE" --source recent | tail -30; cat "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_dir"])' "$RECORD")/pane.log"; cat "$RECORD"; fail "chat pane not recorded"; }
 CHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("chat_pane") or "")' "$RECORD")"
 [ -n "$CHAT" ] || fail "chat pane not recorded"
 wait_for 20 "herdr pane read $CHAT --source recent | grep -q AGENT-STARTED" || fail "agent command did not run"
@@ -334,7 +334,7 @@ python3 - "$WORK/example.out" <<'EOF2' || fail "skill resource or example assert
 import json, sys
 lines = [json.loads(l) for l in open(sys.argv[1])]
 uris = json.loads(next(l for l in lines if l["tool"] == "resources/list")["text"])
-assert "dashr://guide/SKILL.md" in uris and len(uris) == 5, uris
+assert "dashr://guide/SKILL.md" in uris and len(uris) == 7, uris
 reads = [l["text"] for l in lines if l["tool"] == "resources/read"]
 assert reads[0].startswith("---\nname: herdr-dashr") and "CloudWatch" in reads[1]
 init = json.loads(next(l for l in lines if l["tool"] == "initialize")["text"])
@@ -545,12 +545,12 @@ EOF2
 OVOLUMES="$(docker inspect "$OCONTAINER" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}')"
 curl -fsS -H 'content-type: application/json' -d '{"resourceLogs":[]}' "http://127.0.0.1:$OTLP_HTTP/v1/logs" >/dev/null || fail "OTLP/HTTP does not accept logs"
 ok "one hardened otel-lgtm container; Grafana and OTLP (gRPC, HTTP) on loopback only; telemetry in anonymous volumes"
-wait_for 30 "herdr pane read $OPANE --source visible | grep -q 'OTLP http://127.0.0.1:$OTLP_HTTP'" || fail "the pane does not show the OTLP endpoint"
+herdr pane read "$OPANE" --source visible | grep -q "OTLP" && fail "the pane shows the OTLP address, which is not a web page"
 wait_for 30 "grep -q '\"chat_pane\": \"' $ORECORD" || fail "OpenTelemetry chat pane not recorded"
 OCHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("chat_pane") or "")' "$ORECORD")"
 herdr pane run "$OCHAT" 'echo "ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT"' >/dev/null
 wait_for 20 "herdr pane read $OCHAT --source recent | grep -q 'ENDPOINT=http://127.0.0.1:$OTLP_HTTP'" || fail "chat pane lacks OTEL_EXPORTER_OTLP_ENDPOINT"
-ok "text view shows the endpoint; the chat pane exports OTEL_EXPORTER_OTLP_ENDPOINT"
+ok "the pane keeps the OTLP address to itself; the chat pane exports OTEL_EXPORTER_OTLP_ENDPOINT"
 
 echo '[{"tool": "list_saved_dashboards"}, {"tool": "load_dashboard", "arguments": {"name": "e2e pipeline"}}, {"tool": "get_dashboard"}]' >"$WORK/lib3.json"
 python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/lib3.json" >"$WORK/lib3.out"
@@ -655,6 +655,60 @@ EOF2
 wait_for 30 "herdr pane get $OPANE | grep -q '\"agent_status\":\"idle\"'" \
   || { cat "$STATE_DIR/sessions/$OSESSION.watches.json"; herdr pane get "$OPANE"; herdr pane read "$OPANE" --source visible | tail -20; fail "pane did not return to idle after clearing"; }
 ok "clearing removes the section, restores the layout and unblocks the pane"
+log "AC-COLLECT: discover what runs, then live collectors fill the dashboard"
+# An "app" printing ASP.NET and Gin request lines, and a real Postgres.
+docker rm -f dashr-e2e-app dashr-e2e-pg >/dev/null 2>&1 || true
+docker run -d --name dashr-e2e-app --entrypoint sh postgres:16-alpine -c \
+  'while true; do echo "info: Microsoft.AspNetCore.Hosting.Diagnostics[2] Request finished HTTP/1.1 GET http://localhost:5000/orders/42 - 200 - application/json 12.5ms"; echo "[GIN] 2026/09/27 - 19:28:10 | 500 |  2.5ms |  172.21.0.1 | POST     \"/api/embed\""; sleep 0.5; done' >/dev/null
+docker run -d --name dashr-e2e-pg -e POSTGRES_PASSWORD=e2e postgres:16-alpine >/dev/null
+wait_for 60 "docker exec dashr-e2e-pg pg_isready -U postgres" || fail "Postgres did not start"
+sleep 2
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" discover >"$WORK/discover.json" || fail "dashr discover failed"
+python3 - "$WORK/discover.json" <<'EOF2' || fail "discover did not describe the containers"
+import json, sys
+found = json.load(open(sys.argv[1]))
+by = {c["name"]: c for c in found["docker"]["containers"]}
+app, pg = by["dashr-e2e-app"], by["dashr-e2e-pg"]
+assert app["request_lines_in_recent_log"] > 0 and "aspnet" in app["request_log_formats"], app
+assert pg["kind"] == "postgres" and "dashr collect postgres dashr-e2e-pg" in pg["collect"], pg
+assert "dashr collect docker" in found["collect"] and "dashr collect host" in found["collect"]
+text = json.dumps(found)
+assert "Request finished" not in text and "/orders/42" not in text, "discover must not return log lines"
+assert "docker" in found["tools"]["installed"]
+EOF2
+ok "discover found the app (with its request log format) and the Postgres, and no log line"
+collect() { "${AGENT_ENV[@]}" DASHR_SESSION="$OSESSION" "$ROOT/bin/dashr" collect "$@"; }
+collect docker dashr-e2e-app dashr-e2e-pg >"$WORK/c1.json" || fail "collect docker failed"
+collect host >/dev/null || fail "collect host failed"
+collect logs dashr-e2e-app --service shop >/dev/null || fail "collect logs failed"
+collect postgres dashr-e2e-pg >"$WORK/c2.json" || fail "collect postgres failed"
+collect exec --service cloud --every 10 -- sh -c 'printf "queue_depth{queue=\"orders\"} 7\n"' >/dev/null || fail "collect exec failed"
+grep -q '"dashr_pg_connections"' "$WORK/c2.json" || fail "the Postgres trial did not report its metrics"
+grep -q '"value"' "$WORK/c1.json" "$WORK/c2.json" && fail "a collect trial returned values"
+collect exec --service broken -- sh -c 'echo not prometheus' 2>/dev/null && fail "an exec that prints no samples must be refused"
+collect list | python3 -c 'import json,sys; ids=[c["id"] for c in json.load(sys.stdin)]; assert "exec:broken" not in ids and len(ids) == 5, ids' \
+  || fail "collect list is wrong"
+ok "collectors added after a trial (names and label keys only); a broken exec is refused"
+probe() { # <datasource> <expr> -> total rows
+  "${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool probe_query --session "$OSESSION" \
+    --args "$(python3 -c 'import json,sys; ds,e=sys.argv[1:3]; q={"expr": e}; q.update({"instant": True, "range": False} if ds == "prometheus" else {"queryType": "range"}); print(json.dumps({"datasource_uid": ds, "query": q, "from": "now-5m"}))' "$1" "$2")" \
+    | python3 -c 'import json,sys; r=json.load(sys.stdin); print(sum(f["total_rows"] for x in r["results"] for f in x["frames"]))'
+}
+for expr in 'dashr_container_cpu_percent{container="dashr-e2e-app"}' 'dashr_container_memory_bytes{container="dashr-e2e-pg"}' \
+  'dashr_host_memory_used_bytes' 'dashr_http_requests_per_second{service="shop"}' 'dashr_http_latency_p95_ms{service="shop"}' \
+  'dashr_http_server_errors_per_second{service="shop"}' 'dashr_pg_connections{database="dashr-e2e-pg"}' 'dashr_pg_commits_per_second' \
+  'queue_depth{service="cloud"}'; do
+  wait_for 60 "[ \"\$(probe prometheus '$expr')\" -gt 0 ]" || { collect list; fail "no live data for $expr"; }
+done
+wait_for 30 "[ \"\$(probe loki '{service_name=\"shop\"}')\" -gt 0 ]" || fail "the app's log lines did not reach Loki"
+collect list | python3 -c 'import json,sys; bad=[c for c in json.load(sys.stdin) if c["status"] != "ok"]; assert not bad, bad' \
+  || { collect list; fail "a collector reports an error"; }
+ok "the pane collects live: container CPU and memory, host, request rate/errors/p95 from the app log, Postgres, an exec adapter, and the log lines"
+collect remove exec:cloud >/dev/null || fail "collect remove failed"
+collect list | grep -q 'exec:cloud' && fail "a removed collector is still listed"
+ok "a collector can be removed"
+docker rm -f dashr-e2e-app dashr-e2e-pg >/dev/null 2>&1 || true
+
 herdr pane close "$OPANE" >/dev/null
 wait_for 30 "! docker ps --format '{{.Names}}' | grep -q $OCONTAINER" || fail "OpenTelemetry container still running"
 wait_for 10 "[ ! -e $ORECORD ]" || fail "OpenTelemetry session record left behind"

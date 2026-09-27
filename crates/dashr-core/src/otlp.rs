@@ -140,6 +140,42 @@ pub fn logs_payload(service: &str, lines: &[LogLine]) -> Value {
     }]})
 }
 
+/// An OTLP/HTTP JSON metrics payload: every point a gauge under a resource
+/// carrying `service.name`. Gauges keep their names in Prometheus (no unit
+/// or `_total` suffix is added), so a dashboard queries exactly the name a
+/// collector wrote (DEC-043).
+pub fn metrics_payload(
+    service: &str,
+    points: &[crate::collect::Point],
+    time_unix_nano: u128,
+) -> Value {
+    let metrics: Vec<Value> = points
+        .iter()
+        .map(|point| {
+            let attributes: Vec<Value> = point
+                .labels
+                .iter()
+                .map(|(key, value)| json!({"key": key, "value": {"stringValue": value}}))
+                .collect();
+            json!({
+                "name": point.name,
+                "gauge": {"dataPoints": [{
+                    "timeUnixNano": time_unix_nano.to_string(),
+                    "asDouble": point.value,
+                    "attributes": attributes
+                }]}
+            })
+        })
+        .collect();
+    json!({"resourceMetrics": [{
+        "resource": {"attributes": [
+            {"key": "service.name", "value": {"stringValue": service}},
+            {"key": "telemetry.sdk.name", "value": {"stringValue": "dashr-collect"}}
+        ]},
+        "scopeMetrics": [{"scope": {"name": "dashr-collect"}, "metrics": metrics}]
+    }]})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +230,25 @@ mod tests {
         assert_eq!(record["severityText"], "ERROR");
         assert_eq!(record["body"]["stringValue"], "boom ERROR");
         assert_eq!(record["attributes"][0]["value"]["stringValue"], "stderr");
+    }
+
+    #[test]
+    fn metrics_are_gauges_with_labels() {
+        let points = [crate::collect::Point::new(
+            "dashr_container_cpu_percent",
+            &[("container", "db")],
+            3.5,
+        )];
+        let payload = metrics_payload("docker", &points, 42);
+        let metric = &payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0];
+        assert_eq!(metric["name"], "dashr_container_cpu_percent");
+        let point = &metric["gauge"]["dataPoints"][0];
+        assert_eq!(point["asDouble"], 3.5);
+        assert_eq!(point["timeUnixNano"], "42");
+        assert_eq!(point["attributes"][0]["value"]["stringValue"], "db");
+        assert_eq!(
+            payload["resourceMetrics"][0]["resource"]["attributes"][0]["value"]["stringValue"],
+            "docker"
+        );
     }
 }

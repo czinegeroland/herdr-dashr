@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T18:30:00Z |
+| Last updated | 2026-09-27T21:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -321,6 +321,17 @@ Crates:
 | DASHR-LIB-003 | A saved dashboard loads into any later session (`load_dashboard`, `dashr dashboards load`, `dashr session start --load`), replacing the current one and reloading the browser pane; expectations armed on the replaced dashboard are dropped. A dashboard using a datasource the session lacks is refused, naming it, and nothing changes. | Must | Verified | `save_list_load_delete` (missing datasources); AC-LIB load across panes and refusal in an OpenTelemetry pane in `scripts/e2e/run.sh` |
 | DASHR-LIB-004 | Saved dashboards can be listed (with whether each can load in this session) and deleted, and the agent's opening prompt names them so the human can ask for one by name. | Should | Verified | `opening_prompt_names_saved_dashboards`; AC-LIB `list_saved_dashboards` and `dashr dashboards list` checks |
 
+### 8.16 Live collectors (COLL)
+
+| ID | Requirement | Priority | Status | Evidence |
+|---|---|---|---|---|
+| DASHR-COLL-001 | `dashr discover` reports what runs here and what can be measured, without any data value or log line. It covers containers (name, image, kind such as app, Postgres, MySQL, Redis or Ollama, published ports, compose project), whether each container's recent log has request lines and in which format, Prometheus `/metrics` endpoints, installed CLIs (docker, kubectl, aws, az, gcloud, ...) and which clouds look logged in, and project files. It also lists the `dashr collect` commands that would make them live. | Must | Verified | `dashr_runtime::discover` tests; `kinds_and_ports_from_docker_ps`; AC-COLLECT in `scripts/e2e/run.sh` |
+| DASHR-COLL-002 | The dashboard pane runs the session's collectors for as long as it lives, with no agent in the loop. Collectors added or removed with `dashr collect` take effect within seconds. Closing the pane stops them and kills the commands they started. `dashr collect list` shows each collector's state, and the pane shows how many are live and which fail. | Must | Verified | `dashr_runtime::collect::run`; `status_shows_the_link_and_one_health_line_only`; AC-COLLECT |
+| DASHR-COLL-003 | Built-in collectors cover the usual system signals. Containers: CPU, memory and limit, network and disk IO, PIDs, up. The host: CPU, load, memory, swap, disk use and IO, network. Processes by name. Postgres, MySQL and Redis containers: connections, throughput, cache hit ratio, slow or longest queries, and normalized `pg_stat_statements` when installed, read with the database's own client inside its container. | Must | Verified | `docker_stats_json_line`, `database_status_lines_and_query_labels`, `host_and_process_samples_carry_the_expected_metrics`; AC-COLLECT (Docker, host, Postgres) |
+| DASHR-COLL-004 | `logs <container>` and `stream -- <command>` send a log command's lines to Loki and derive request rate, 4xx/5xx rates, error ratio and p50/p95/p99 latency from ASP.NET, Gin, nginx/Apache, JSON and generic request lines. Only the method, status and duration are read, never the path. A stream that ends is restarted. | Must | Verified | `request_lines_from_common_servers`, `a_window_gives_rates_errors_and_percentiles`; AC-COLLECT |
+| DASHR-COLL-005 | `exec --every N -- <command>` runs any command on a schedule (at least every 10 s, through `cmd /c` on Windows) and stores the Prometheus text it prints. `scrape <url>` forwards a `/metrics` endpoint. This is how clouds (AWS, Azure, Google Cloud), clusters and remote hosts reach the dashboard, through whatever CLI the agent uses. Every collector is tried once when added: only its metric names and label keys are reported, and a collector that produces nothing is refused. | Must | Verified | `prometheus_text_with_labels_escapes_and_junk`, `exec_reads_prometheus_text_and_labels_the_service`, `trial_reports_names_not_values`; AC-COLLECT |
+| DASHR-COLL-006 | The skill makes discovery, collection and the system dashboard the default flow for any target: local apps, containers, databases, Kubernetes, AWS, Azure, Google Cloud, remote hosts. It includes a standard system-engineer layout, per-environment discovery and adapter examples, and the rule that the agent never generates traffic to measure. | Must | Implemented | `.agents/skills/herdr-dashr/SKILL.md`, `reference/collectors.md`, `reference/environments.md` |
+
 ## 9. Security requirements
 
 | ID | Requirement | Status | Evidence |
@@ -403,6 +414,7 @@ Crates:
 | DEC-040 | The dashboard pane shows a link instead of a browser. The human opens Grafana in their own browser (Chrome), which is a better experience than a terminal renderer. An open tab follows every dashboard change by itself through Grafana Live, verified with a real Chrome, so the pane needs no reload hook. terminal-browser has no Windows build and no public license, so it could not be bundled or pinned. The pane narrows itself to a fifth of its split and shows only the link, panel health, alerts and the OTLP endpoint. This supersedes the terminal-browser parts of DEC-034 and the browser-profile handling. The `screenshot` tool still uses terminal-browser if it happens to be installed. |
 | DEC-041 | The human sees only the dashboard. Kiosk mode hides Grafana's menus, but Esc brings back all of Grafana, and anonymous visitors are admins (dashr's own API calls rely on that). Grafana's shared ("public") dashboard view shows one dashboard and nothing else, even after Esc, but it does not follow changes. So the pane serves a small loopback page: the shared dashboard filling the window, reloaded when the saved dashboard version changes (polled every 2 s). The reload also brings in a time range the agent set, such as log checks' "since arming". The page answers only `/` and `/version`. Checked with a real Chrome: kiosk exits to the full UI on Esc; the shared view shows no Grafana UI and needs a reload to change. |
 | DEC-042 | First public release, 1.0.0. The README is a short landing page (what it is, one install command) modelled on tsk; configuration, privacy and the CLI moved to `docs/USAGE.md`, development to `CONTRIBUTING.md`. The one-line description is the same everywhere (npm, `herdr-plugin.toml`, GitHub About): "Live Grafana dashboards your AI agent builds, right beside your chat in Herdr." The manifest follows tsk's style (a one-line header, `name = "herdr-dashr"`, a description on every action, the dashboard pane as a split) and is still generated. herdr.dev/plugins lists repositories with the `herdr-plugin` topic and a valid manifest; the card shows the GitHub description. The 0.1.x npm versions were tests; the owner removes them by hand (npm refuses unpublishing with the 2FA-bypass token CI uses). The skill is installed for every detected agent, not only Claude Code; `--agent '*'` was rejected because it created about 70 agent folders in HOME. |
+| DEC-043 | Dashboards are built from what is actually running, for any environment. `dashr discover` finds local containers, processes, databases and their log formats. Collectors run inside the dashboard pane, so the dashboard stays live without an agent polling, and they stop with the pane. dashr knows no cloud: `exec` (any command printing Prometheus text on a schedule) and `stream` (any command printing log lines) are the adapters, and the skill shows how to write them around `aws`, `az`, `gcloud`, `kubectl` or `ssh`. Collector metrics are gauges that are already rates, so panels need no `rate()`. Request metrics read only method, status and duration from log lines, never the path, which can carry ids or personal data. The OTLP address left the pane: it is not a web page, and opening it returned 404. Found in a real session, where the dashboard showed only log panels and the agent's own health probe was the traffic. |
 
 ## 13. Open questions and risks
 
@@ -451,6 +463,7 @@ Crates:
 | 2026-09-27 | The plugin install also puts `dashr` on the PATH with a new build step (`dashr global install --best-effort` → `npm install -g herdr-dashr@<version>`), so the AI session needs no manual `npm install -g`. A failure is reported and never fails the install. Released as 1.0.0. | HERDR-011 |
 | 2026-09-27 | 1.0.0 (DEC-042): a short README, one description everywhere, a tsk-style manifest (checked with Herdr 0.9.1), the skill for every detected coding agent. | SKILL-002 |
 | 2026-09-27 | Removed the `Unpublish from npm` workflow: npm refuses unpublishing with a token that bypasses 2FA, so the owner removes the 0.1.x test versions by hand. | none (workflow removal) |
+| 2026-09-27 | Live collectors (DEC-043). New `dashr discover`, and `dashr collect` with docker, host, process, logs, stream, exec, scrape, postgres, mysql and redis, run by the pane. The skill now leads with discover → collect → system dashboard for any environment, with new `reference/collectors.md` and `reference/environments.md`. The OTLP address left the pane, and the pane logs its chat-pane decisions (`pane.log`) to diagnose AC-OPEN's intermittent missing chat pane. Version 1.0.1. | COLL-001, COLL-002, COLL-003, COLL-004, COLL-005, COLL-006 |
 
 ### Requirement completion summary
 
@@ -470,9 +483,10 @@ Crates:
 | OTEL | 6 | 6 | 0 | 0 |
 | LOGX | 5 | 5 | 0 | 0 |
 | LIB | 4 | 4 | 0 | 0 |
+| COLL | 6 | 5 | 1 | 0 |
 | GOV/TECH | 8 | 6 | 2 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 104 | 97 | 7 | 0 |
+| **All** | 110 | 102 | 8 | 0 |
 
 ## 15. Acceptance criteria
 
@@ -494,6 +508,7 @@ Crates:
   never carries a line; clearing restores the dashboard and unblocks the pane.
 - **AC-AGENT** From an ordinary pane, the skill's commands open a dashboard pane beside it with no chat pane. `dashr wait` returns the session and a briefing (a pipeline's, when a link was given) without Grafana's address. `dashr tool` answers by pane id and never returns planted personal values. Closing the pane removes the session.
 - **AC-CHROME** The link in the pane opens the dashboard in a real Chrome. When the agent applies a change, the open tab shows it within seconds without reloading. A tab opened after arming log checks highlights expected and forbidden lines and picks up new lines by itself.
+- **AC-COLLECT** `dashr discover` describes a request-logging app container and a Postgres, without returning a log line. `dashr collect` adds docker, host, logs, postgres and exec collectors after a trial that reports names only, and refuses a broken one. Within a minute the session's Prometheus has live container CPU and memory, host memory, request rate, errors and p95 from the app's log, Postgres connections and commits, and the exec adapter's metric, and Loki has the app's lines. A collector can be removed.
 - **AC-LIB** A dashboard saved by name in one pane loads into a later pane;
   an existing name is not replaced without asking; a dashboard needing a
   datasource the session lacks is refused, naming it, and nothing changes.

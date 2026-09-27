@@ -175,9 +175,9 @@ pub fn agent_argv(template: &[String], mcp_config: &Path, prompt: &str) -> Vec<S
 /// agent's business (`panel_status`), not the human's.
 fn render_status(
     out: &mut impl Write,
-    record: &SessionRecord,
     link: &str,
     tick: Option<&Tick>,
+    collectors: &std::collections::BTreeMap<String, std::result::Result<(), String>>,
     note: &str,
 ) {
     let _ = write!(out, "\x1b[2J\x1b[H");
@@ -208,9 +208,25 @@ fn render_status(
             }
         }
     }
-    if let Some(otlp) = &record.otlp {
-        let _ = writeln!(out);
-        let _ = writeln!(out, "OTLP {}", otlp.http_endpoint());
+    if !collectors.is_empty() {
+        let failing: Vec<(&String, &String)> = collectors
+            .iter()
+            .filter_map(|(id, state)| state.as_ref().err().map(|error| (id, error)))
+            .collect();
+        let colour = if failing.is_empty() { "32" } else { "33" };
+        let _ = writeln!(
+            out,
+            "\x1b[{colour}m●\x1b[0m {} live collector{}",
+            collectors.len(),
+            if collectors.len() == 1 { "" } else { "s" }
+        );
+        for (id, error) in failing.iter().take(3) {
+            let _ = writeln!(
+                out,
+                "\x1b[33m⚠ {id}: {}\x1b[0m",
+                error.chars().take(60).collect::<String>()
+            );
+        }
     }
     if !note.is_empty() {
         let _ = writeln!(out);
@@ -373,6 +389,24 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
     // A chat pane only when a Herdr action asked for one; a pane the human's
     // AI session opened is driven by that session (DEC-039).
     let chat = config.agent.enabled && std::env::var(CHAT_ENV).is_ok_and(|value| value == "1");
+    // What the pane decided about its chat pane, for diagnosing a missing
+    // one (AC-OPEN occasionally found none, with no error shown).
+    let chat_log = record.runtime_dir.join("pane.log");
+    let log_chat = |line: &str| {
+        use std::io::Write as _;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&chat_log)
+        {
+            let _ = writeln!(file, "{line}");
+        }
+    };
+    log_chat(&format!(
+        "chat: agent.enabled={} {CHAT_ENV}={:?} -> {chat}",
+        config.agent.enabled,
+        std::env::var(CHAT_ENV).ok()
+    ));
     let saved: Vec<String> = dashr_core::library::Library::new(&paths.state_dir)
         .list()
         .into_iter()
@@ -473,12 +507,18 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
                 if let Err(error) = herdr.pane_run(&chat, &dashr_core::shell::join(&argv)) {
                     println!("dashr: could not start the agent: {error}");
                 }
+                log_chat(&format!("chat: split -> {chat}"));
                 record.chat_pane = Some(chat);
-                if let Err(error) = store.save(&record) {
-                    chat_note = format!("Chat pane not recorded: {error}");
+                match store.save(&record) {
+                    Ok(()) => log_chat("chat: recorded"),
+                    Err(error) => {
+                        log_chat(&format!("chat: not recorded: {error}"));
+                        chat_note = format!("Chat pane not recorded: {error}");
+                    }
                 }
             }
             Err(error) => {
+                log_chat(&format!("chat: split failed: {error}"));
                 println!("dashr: could not open the chat pane: {error}");
                 chat_note = format!("Chat pane not opened: {error}");
             }
@@ -555,9 +595,46 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
                 .to_owned(),
         ),
     };
+    // Live collectors (DEC-043): this pane is the background job that keeps
+    // the dashboard's data flowing, for as long as it lives.
+    let health: dashr_runtime::collect::Health = Arc::default();
+    if let Some(otlp) = &record.otlp {
+        let exporter = dashr_runtime::otlp::Exporter::new(&otlp.http_endpoint());
+        let store = store.clone();
+        let session_id = record.session_id.clone();
+        let stop = Arc::clone(&stop);
+        let health = Arc::clone(&health);
+        std::thread::spawn(move || {
+            dashr_runtime::collect::run(exporter, store, session_id, stop, health);
+        });
+    }
     while !stop.load(Ordering::SeqCst) {
         let tick = latest.lock().ok().and_then(|slot| slot.clone());
-        render_status(&mut std::io::stdout(), &record, &link, tick.as_ref(), &note);
+        let collectors = health.lock().map(|h| h.clone()).unwrap_or_default();
+        // For `dashr collect list`.
+        let summary: serde_json::Map<String, serde_json::Value> = collectors
+            .iter()
+            .map(|(id, state)| {
+                (
+                    id.clone(),
+                    match state {
+                        Ok(()) => json!("ok"),
+                        Err(error) => json!({"error": error}),
+                    },
+                )
+            })
+            .collect();
+        let _ = std::fs::write(
+            record.runtime_dir.join(crate::agent::COLLECTOR_HEALTH_FILE),
+            serde_json::Value::Object(summary).to_string(),
+        );
+        render_status(
+            &mut std::io::stdout(),
+            &link,
+            tick.as_ref(),
+            &collectors,
+            &note,
+        );
         wait(&stop, Duration::from_secs(2));
     }
 
@@ -683,24 +760,31 @@ mod tests {
             ..Tick::default()
         };
         let mut out = Vec::new();
+        let mut collectors = std::collections::BTreeMap::new();
+        collectors.insert("docker".to_owned(), Ok(()));
+        collectors.insert("logs:api".to_owned(), Err("docker: not found".to_owned()));
         render_status(
             &mut out,
-            &record(),
             "http://127.0.0.1:41234/",
             Some(&tick),
+            &collectors,
             "",
         );
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("\nhttp://127.0.0.1:41234/\n"), "{text}");
         assert!(text.contains("panels 1 ok · 1 err"));
         assert!(text.contains("DLQ not empty"));
+        assert!(text.contains("2 live collectors"));
+        assert!(text.contains("logs:api: docker: not found"));
+        assert!(!text.contains("OTLP"));
         // Narrow: no line of text wider than the link.
         let widest = text
             .lines()
             .map(|line| strip_ansi(line).chars().count())
             .max()
             .unwrap();
-        assert!(widest <= "http://127.0.0.1:41234/".len(), "{text}");
+        // Narrow: a collector warning is the widest line it can print.
+        assert!(widest <= 70, "{text}");
     }
 
     fn strip_ansi(line: &str) -> String {

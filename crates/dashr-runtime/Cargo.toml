@@ -19,6 +19,7 @@ thiserror.workspace = true
 signal-hook.workspace = true
 tungstenite.workspace = true
 ureq.workspace = true
+sysinfo.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

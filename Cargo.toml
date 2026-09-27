@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -40,6 +40,8 @@ signal-hook = "0.4"
 # Drives terminal-browser's Chromium over the DevTools protocol (DEC-024).
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 tempfile = "3"
+# Host and process CPU, memory, disk and network for the collectors (DEC-043).
+sysinfo = { version = "0.38", default-features = false, features = ["system", "disk", "network"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
