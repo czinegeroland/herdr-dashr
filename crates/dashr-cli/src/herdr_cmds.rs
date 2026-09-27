@@ -16,6 +16,11 @@ pub const PIPELINE_ENV: &str = "DASHR_PIPELINE_URL";
 pub const OTEL_ENV: &str = "DASHR_OTEL";
 /// Working directory for the chat pane, from the invoking context.
 pub const ORIGIN_CWD_ENV: &str = "DASHR_ORIGIN_CWD";
+/// Set to `1` by the Herdr actions: the pane opens its own chat pane with an
+/// agent. A pane the human's AI session opened itself (`herdr plugin pane
+/// open`, as the skill says) has no chat pane: that session drives it
+/// (DEC-039).
+pub const CHAT_ENV: &str = "DASHR_CHAT";
 
 pub fn load_config(paths: &Paths) -> Result<Config> {
     Config::load_from_dir(&paths.config_dir).map_err(|error| error.to_string())
@@ -27,7 +32,7 @@ fn open_dashboard(
     pipeline: Option<&str>,
     otel: bool,
 ) -> Result<()> {
-    let mut pane_env = Vec::new();
+    let mut pane_env = vec![(CHAT_ENV.to_owned(), "1".to_owned())];
     if otel {
         pane_env.push((OTEL_ENV.to_owned(), "1".to_owned()));
     }

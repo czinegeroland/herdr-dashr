@@ -8,21 +8,26 @@
 
 id = "herdr-dashr"
 name = "Herdr Dashr"
-version = "0.1.1"
+version = "0.1.2"
 min_herdr_version = "0.9.0"
 description = "Agent-built, live Grafana dashboards in a Herdr pane, with masking between your data and the agent."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["cmd", "/c", "npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.1"]
+command = ["cmd", "/c", "npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.2"]
 platforms = ["windows"]
 
 [[build]]
-command = ["npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.1"]
+command = ["npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.2"]
 platforms = ["linux", "macos"]
 
 [[build]]
-command = ["node", "node_modules/herdr-dashr/bin.js", "skill", "install", "--best-effort"]
+command = ["cmd", "/c", "npx", "--yes", "skills", "add", "czinegeroland/herdr-dashr", "--skill", "herdr-dashr", "--agent", "claude-code", "--global", "--yes"]
+platforms = ["windows"]
+
+[[build]]
+command = ["npx", "--yes", "skills", "add", "czinegeroland/herdr-dashr", "--skill", "herdr-dashr", "--agent", "claude-code", "--global", "--yes"]
+platforms = ["linux", "macos"]
 
 [[startup]]
 command = ["node", "node_modules/herdr-dashr/bin.js", "herdr", "startup"]

@@ -2,7 +2,7 @@
 //! other.
 //!
 //! One JSON file per dashboard pane under
-//! `$HERDR_PLUGIN_STATE_DIR/sessions/`. It holds identifiers and a loopback
+//! `<state dir>/sessions/`. It holds identifiers and a loopback
 //! port, never a secret or a data value (requirement DASHR-GRAF-008), and it
 //! is deleted when the pane stops. Watches live in a sibling file because
 //! two processes write them: the MCP server adds rules and the pane records

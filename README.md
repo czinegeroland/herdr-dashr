@@ -1,14 +1,18 @@
 # herdr-dashr
 
 A [Herdr](https://github.com/herdrdev/herdr) plugin that opens an
-**agent-built, live Grafana dashboard inside a Herdr pane**, with a coding
-agent underneath to reshape it.
+**agent-built, live Grafana dashboard inside a Herdr pane**, built and
+reshaped by the AI session you are already talking to.
+
+You only talk to your AI session. Paste a CodePipeline link and say
+*"visualize it on a dashboard"*: its herdr-dashr skill opens the dashboard
+pane beside you and builds the dashboard, then keeps changing it as you ask.
 
 - **Real Grafana, in the terminal.** The top pane shows Grafana in kiosk mode
   through [terminal-browser](https://github.com/zenbu-labs/terminal-browser);
   without it, a text status view.
 - **No model in the data path.** Grafana refreshes the data. The agent only
-  changes the dashboard, through an MCP server.
+  changes the dashboard, through the `dashr` tools (a command line, or MCP).
 - **Privacy by construction.** The agent designs from schemas and masked
   samples (`<email#1>`, `<ipv4#2>`); only you see real values.
 - **Disposable.** A pane-owned Grafana container with a read-only root and
@@ -26,7 +30,7 @@ agent underneath to reshape it.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.1.1, on GitHub and npm, for Linux, macOS and Windows. Windows support is new; everything else is verified, most by an end-to-end
+**Status:** v0.1.2, on GitHub and npm, for Linux, macOS and Windows. Windows support and the AI-session flow are new; everything else is verified, most by an end-to-end
 suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
 
 ## Install
@@ -47,6 +51,12 @@ refuses to run as root), Claude Code (the chat pane) and the AWS CLI
 (CodePipeline, CloudWatch) are optional — run the **Check dashr
 prerequisites** action to see what is missing.
 
+Another build step installs the **herdr-dashr skill** for Claude Code with
+`npx skills add czinegeroland/herdr-dashr --skill herdr-dashr --agent
+claude-code --global`, as herdr-remote-channel installs its skill. Your AI
+session also needs the `dashr` command: `npm install -g herdr-dashr` (the
+skill runs it for you when `dashr` is missing).
+
 On Windows, Docker Desktop must be running, and the chat pane's shell is
 PowerShell. Without terminal-browser the dashboard pane shows the Grafana URL;
 Ctrl-click it to open Grafana in your browser.
@@ -63,6 +73,21 @@ one that runs on your machine, with no postinstall script and no download
 from GitHub.
 
 ## Use
+
+Ask your AI session, in Herdr:
+
+- *"Visualize this on a dashboard: https://eu-west-1.console.aws.amazon.com/codesuite/codepipeline/pipelines/api/view"*
+- *"Show me error rates and latency for checkout."*
+- *"I'm about to run the importer — show me its logs and check that `import done` is logged."*
+
+The skill opens the dashboard pane beside the conversation (`herdr plugin
+pane open --plugin herdr-dashr --entrypoint dashboard`), waits for Grafana
+(`dashr wait`) and builds with `dashr tool <name>`: the same tools, masking
+and privacy rules as the MCP server. You never have to leave the
+conversation.
+
+The Herdr actions still work without an AI session of your own; they open a
+tab with Grafana on top and a new agent underneath:
 
 | Action | What it does |
 |---|---|
@@ -135,8 +160,11 @@ supported datasource (Prometheus, Loki, Tempo, CloudWatch, SQL Server, Azure
 Monitor, Zabbix, Seq, TestData) and debugging recipes (deploys, queue
 backlogs, Step Functions failures, error spikes, latency).
 
-- Installed by the plugin's build step, refreshed by the dashboard pane when
-  the binary is newer. A skill of the same name that you wrote is never
+- Installed by the plugin's build step with `npx skills add` from this
+  repository, as herdr-remote-channel does. It teaches your own AI session
+  to open the dashboard pane and drive it with `dashr wait` and `dashr tool`.
+- `dashr skill install --dir <skills-dir>` installs the copy embedded in the
+  binary, for other agents; a skill of the same name that you wrote is never
   replaced (`--force` to override).
 - Also served as MCP resources (`dashr://guide/...`), so any MCP agent gets it.
 - `dashr skill files`, `dashr skill print reference/recipes.md`,

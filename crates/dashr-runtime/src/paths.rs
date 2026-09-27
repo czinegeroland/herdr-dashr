@@ -1,15 +1,29 @@
 //! Where configuration, state and runtime files live.
 //!
-//! Under Herdr the plugin directories come from `HERDR_PLUGIN_CONFIG_DIR`
-//! and `HERDR_PLUGIN_STATE_DIR`. The chat pane is an ordinary pane without
-//! those variables, so the paths are passed to `dashr mcp` explicitly; run
-//! by hand, dashr falls back to XDG locations.
+//! State — session records, watches, saved dashboards — lives in dashr's own
+//! directory, not Herdr's plugin state directory, as herdr-remote-channel
+//! keeps its own home (DEC-039): the dashboard pane, the human's AI session
+//! running `dashr wait` / `dashr tool`, and dashr run by hand must all find
+//! the same sessions, and only the pane has Herdr's plugin variables.
+//! `DASHR_STATE_DIR` overrides it; otherwise it follows the platform
+//! convention.
+//!
+//! Configuration comes from `HERDR_PLUGIN_CONFIG_DIR` under Herdr (where
+//! `herdr plugin config-dir herdr-dashr` points), else the platform default.
+//! A pane records the directory it used, so the AI session's `dashr tool`
+//! masks with the same configuration (see `CONFIG_DIR_FILE`).
 //!
 //! Runtime files — provisioning, the MCP config, the browser profile — go
 //! to a memory-backed directory when the platform has one
 //! (requirement DASHR-GRAF-004).
 
 use std::path::{Path, PathBuf};
+
+/// Overrides the state directory.
+pub const STATE_ENV: &str = "DASHR_STATE_DIR";
+/// In a session's runtime directory: the configuration directory the pane
+/// loaded, so commands run outside Herdr use the same masking rules.
+pub const CONFIG_DIR_FILE: &str = "config-dir";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
@@ -19,30 +33,60 @@ pub struct Paths {
 
 fn home() -> PathBuf {
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
 }
 
+fn env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The platform's configuration directory for dashr.
+fn default_config_dir() -> PathBuf {
+    // Windows first: a Windows host may also define HOME.
+    if cfg!(windows)
+        && let Some(appdata) = env_path("APPDATA")
+    {
+        return appdata.join("herdr-dashr");
+    }
+    env_path("XDG_CONFIG_HOME")
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join("herdr-dashr"))
+        .unwrap_or_else(|| home().join(".config").join("herdr-dashr"))
+}
+
+/// The platform's state directory for dashr.
+fn default_state_dir() -> PathBuf {
+    if cfg!(windows)
+        && let Some(appdata) = env_path("APPDATA")
+    {
+        return appdata.join("herdr-dashr").join("state");
+    }
+    if let Some(xdg) = env_path("XDG_STATE_HOME").filter(|dir| dir.is_absolute()) {
+        return xdg.join("herdr-dashr");
+    }
+    if cfg!(target_os = "macos") {
+        return home().join("Library/Application Support/herdr-dashr");
+    }
+    home().join(".local").join("state").join("herdr-dashr")
+}
+
 impl Paths {
-    /// Resolves paths from explicit values, Herdr's plugin variables, then
-    /// XDG defaults.
+    /// Resolves paths: explicit values first, then `HERDR_PLUGIN_CONFIG_DIR`
+    /// (configuration) and `DASHR_STATE_DIR` (state), then the platform
+    /// defaults.
     pub fn resolve(config_dir: Option<PathBuf>, state_dir: Option<PathBuf>) -> Self {
-        let env_path = |name: &str| {
-            std::env::var_os(name)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        };
-        let config_dir = config_dir
-            .or_else(|| env_path("HERDR_PLUGIN_CONFIG_DIR"))
-            .or_else(|| env_path("XDG_CONFIG_HOME").map(|dir| dir.join("herdr-dashr")))
-            .unwrap_or_else(|| home().join(".config").join("herdr-dashr"));
-        let state_dir = state_dir
-            .or_else(|| env_path("HERDR_PLUGIN_STATE_DIR"))
-            .or_else(|| env_path("XDG_STATE_HOME").map(|dir| dir.join("herdr-dashr")))
-            .unwrap_or_else(|| home().join(".local").join("state").join("herdr-dashr"));
         Self {
-            config_dir,
-            state_dir,
+            config_dir: config_dir
+                .or_else(|| env_path("HERDR_PLUGIN_CONFIG_DIR"))
+                .unwrap_or_else(default_config_dir),
+            state_dir: state_dir
+                .or_else(|| env_path(STATE_ENV))
+                .unwrap_or_else(default_state_dir),
         }
     }
 }

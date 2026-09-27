@@ -1,5 +1,6 @@
 //! The `dashr` binary: Herdr plugin entrypoints and standalone commands.
 
+mod agent;
 mod doctor;
 mod herdr_cmds;
 mod pane;
@@ -20,7 +21,7 @@ struct Cli {
     /// Configuration directory (default: HERDR_PLUGIN_CONFIG_DIR, then XDG).
     #[arg(long, global = true)]
     config_dir: Option<PathBuf>,
-    /// State directory (default: HERDR_PLUGIN_STATE_DIR, then XDG).
+    /// State directory (default: DASHR_STATE_DIR, then the platform default).
     #[arg(long, global = true)]
     state_dir: Option<PathBuf>,
     #[command(subcommand)]
@@ -41,6 +42,34 @@ enum Command {
         /// The herdr executable, for opening new dashboard tabs.
         #[arg(long)]
         herdr_bin: Option<String>,
+    },
+    /// Wait for a dashboard pane's Grafana, then print the session and the
+    /// agent's briefing as JSON. For the AI session that opened the pane.
+    Wait {
+        /// A session id or its dashboard pane id (what `herdr plugin pane
+        /// open` printed); defaults to $DASHR_SESSION, else the only session.
+        #[arg(long)]
+        session: Option<String>,
+        /// Seconds to wait; the first start pulls the Grafana image.
+        #[arg(long, default_value_t = 180)]
+        timeout: u64,
+    },
+    /// Call one dashboard tool (the MCP tools, as a command) and print its
+    /// JSON answer, masked like every tool answer. Without a name, list the
+    /// tools and their arguments.
+    Tool {
+        /// e.g. list_datasources, probe_query, apply_dashboard, panel_status.
+        name: Option<String>,
+        /// A session id or its dashboard pane id; defaults to $DASHR_SESSION,
+        /// else the only session.
+        #[arg(long)]
+        session: Option<String>,
+        /// The tool's arguments as a JSON object.
+        #[arg(long, conflicts_with = "args_file")]
+        args: Option<String>,
+        /// A file holding the arguments (`-` for stdin), for large dashboards.
+        #[arg(long)]
+        args_file: Option<PathBuf>,
     },
     /// Manage sessions without Herdr.
     Session {
@@ -269,6 +298,23 @@ fn run(cli: Cli) -> Result<()> {
             HerdrCommand::Startup => herdr_cmds::startup(&paths),
         },
         Command::Mcp { session, herdr_bin } => standalone::mcp(&paths, &session, herdr_bin),
+        Command::Wait { session, timeout } => agent::wait(
+            &paths,
+            session.as_deref(),
+            std::time::Duration::from_secs(timeout),
+        ),
+        Command::Tool {
+            name,
+            session,
+            args,
+            args_file,
+        } => agent::tool(
+            &paths,
+            session.as_deref(),
+            name.as_deref(),
+            args.as_deref(),
+            args_file.as_deref(),
+        ),
         Command::Session { command } => match command {
             SessionCommand::Start {
                 name,

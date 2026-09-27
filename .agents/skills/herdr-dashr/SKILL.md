@@ -1,17 +1,97 @@
 ---
 name: herdr-dashr
-description: Build, verify and evolve live Grafana dashboards in a herdr-dashr session through the dashr MCP tools, from the human's debugging question, without ever seeing real data values. Use whenever the dashr MCP server is connected, the human asks for a dashboard, graph, panel, log view, queue/alarm view or "show me" in Herdr, or opens a CodePipeline for debugging.
+description: >-
+  Show the human a live Grafana dashboard in a Herdr pane beside you, and
+  build it with the `dashr` command line, without ever seeing real data
+  values. Use when the human asks to visualize, graph, chart or watch
+  something, asks for a dashboard, pastes an AWS CodePipeline link and asks to
+  see it, or wants to check that the right log messages fire. Open the pane
+  yourself and build the dashboard yourself; never send the human to a menu or
+  a terminal. Also use it when the dashr MCP tools are connected.
 metadata:
   generated-by: herdr-dashr
 ---
 
-# Building dashboards with herdr-dashr
+# Live dashboards with herdr-dashr
 
-You design a live Grafana dashboard that the human watches in the Herdr pane
-above you. Grafana fetches and refreshes the data itself; **you only change
-the dashboard**. You never see data values — only schemas, masked samples,
-row counts and errors. Treat that as the physics of this environment, not an
-obstacle.
+The human talks only to you. You open a dashboard pane beside yourself and
+design a live Grafana dashboard in it; Grafana fetches and refreshes the data
+itself, and **you only change the dashboard**. You never see data values —
+only schemas, masked samples, row counts and errors. Treat that as the
+physics of this environment, not an obstacle.
+
+## Opening the dashboard
+
+**Open the pane. Do not describe how to open it.** Herdr opens a plugin pane
+on request, so telling the human to find an action or run a command is the
+failure this section exists to prevent.
+
+```bash
+"${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin herdr-dashr --entrypoint dashboard \
+  --placement split --target-pane "$HERDR_PANE_ID" --direction right --no-focus
+```
+
+`HERDR_PANE_ID` is your own pane, so the dashboard opens beside you rather
+than beside whatever pane has focus.
+
+Add one `--env` for what the human asked for:
+
+| The human | Add |
+|---|---|
+| pasted an AWS CodePipeline console link ("visualize it on a dashboard") | `--env DASHR_PIPELINE_URL=<the link>` |
+| wants live logs, traces or metrics from code they run, or to check log messages | `--env DASHR_OTEL=1` |
+| anything else | nothing |
+
+The command prints JSON; the new pane's id is its `pane_id`. The first start
+pulls the Grafana image, so wait for it:
+
+```bash
+dashr wait --session <pane_id>
+```
+
+`dashr wait` prints the `session` id and a `brief`: what is already on the
+dashboard (for a pipeline, a first dashboard of its stages, Lambdas, queues
+and log groups) and what to do next. Say in one line that the dashboard is
+open beside them, then build.
+
+The human closes the pane when they are done; closing it deletes the
+Grafana and everything in it. Close it yourself only when asked:
+`herdr pane close <pane_id>`.
+
+## Before you start
+
+```bash
+dashr --help
+dashr doctor
+```
+
+If `dashr` is not found, it has not been installed globally. `npx
+herdr-dashr` runs it for one invocation without putting it on `PATH`;
+installing does:
+
+```bash
+npm install -g herdr-dashr
+```
+
+A shell opened before that install keeps its old `PATH`, so a new terminal
+may be all that is missing. `dashr doctor` checks Docker, which must be
+running; if it is not, tell the human — you cannot start it for them.
+
+## Calling the tools
+
+Every dashboard tool is one command:
+
+```bash
+dashr tool <name> --session <session> --args '<json object>'
+dashr tool apply_dashboard --session <session> --args-file dashboard.json
+dashr tool                      # every tool with its arguments
+```
+
+It prints the tool's JSON answer and exits 0, or prints the error on stderr
+and exits 1 (2 for a bad command line). Prefer `--args-file` for anything
+long — a whole dashboard — and on Windows, where quoting JSON in a shell is
+fragile. Inside a dashr chat pane the same tools are connected as MCP tools
+with the same names and arguments; use those there.
 
 ## The loop
 
@@ -31,7 +111,7 @@ one in twenty.
    `reference/dashboard-json.md`.
 4. **Apply.** `apply_dashboard` with the whole dashboard. dashr validates
    datasource references, assigns ids and layout where missing, pins the uid,
-   refresh and tags, and reloads the browser pane.
+   refresh and tags, and reloads the dashboard pane.
 5. **Verify.** `panel_status`. Every panel should be `ok`. For each `empty` or
    `error` panel: read the (masked) error, `probe_query` a simpler version,
    fix, re-apply. Never leave a broken panel on the dashboard; remove it if
@@ -45,8 +125,8 @@ one in twenty.
    `watch_panel` (evaluated locally; you never see the values). If the
    dashboard is worth keeping, `save_dashboard` it under a name the human
    picks (it stays on this machine and `load_dashboard` reopens it in a
-   later pane), or `promote` it to the team's Grafana. When a session starts
-   and the human names a saved dashboard, load it before building anything.
+   later pane), or `promote` it to the team's Grafana. When the human names a
+   saved dashboard, open the pane and load it before building anything.
 
 Report briefly after each apply: what the dashboard now shows and what is
 still empty or failing. Do not describe values — you do not know them; the
@@ -58,9 +138,9 @@ human can see them.
   value gets the same pseudonym within one answer, so repetition and
   cardinality are visible. Use that: "12 rows, 3 distinct users" is fine.
 - Never try to read values another way: no `curl` to the Grafana port, no
-  reading the dashboard pane, no screenshots of dashboards with personal
-  datasources (the `screenshot` tool refuses them; it exists for layout
-  checks on non-personal data).
+  reading the dashboard pane (`herdr pane read`), no screenshots of
+  dashboards with personal datasources (the `screenshot` tool refuses them;
+  it exists for layout checks on non-personal data).
 - Do not put personal data into queries or titles. Filter by labels and
   services, not by a person's email.
 - Error messages are masked too; a `<email#1>` in an error is a hint that the

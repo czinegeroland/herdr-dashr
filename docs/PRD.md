@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T01:15:00Z |
+| Last updated | 2026-09-27T02:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -163,6 +163,7 @@ Crates:
 | DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
 | DASHR-HERDR-008 | The plugin declares and supports Linux, macOS and Windows. | Must | Implemented | Manifest `platforms`; unit tests on all three in `.github/workflows/build-and-test.yml` (Windows also run under Wine before merging); e2e on Linux; a real Windows install pending |
 | DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
+| DASHR-HERDR-010 | A dashboard pane the human's AI session opens itself (`herdr plugin pane open --plugin herdr-dashr --entrypoint dashboard`, split beside it) opens no chat pane: that session drives it. Only the Herdr actions open a chat pane with its own agent. The pane writes the briefing `dashr wait` hands the session. | Must | Verified | AC-AGENT in `scripts/e2e/run.sh` |
 
 ### 8.2 Grafana lifecycle (GRAF)
 
@@ -176,6 +177,7 @@ Crates:
 | DASHR-GRAF-006 | The pane stops its container on normal exit and on SIGINT, SIGTERM and SIGHUP (Herdr sends SIGHUP on pane close). | Must | Verified | AC-CLOSE (pane close sends SIGHUP) in `scripts/e2e/run.sh` |
 | DASHR-GRAF-007 | The image is pinned (`grafana/grafana:12.1.1`); `dashr image build` produces a custom image with Infinity and Zabbix plugins installed outside the tmpfs path. | Must | Verified | Custom-image scenario in `scripts/e2e/run.sh` (Infinity loaded from outside the tmpfs) |
 | DASHR-GRAF-008 | A session record (ids, port, uid, datasource policies) is written to the plugin state directory, holds no secret or data value, and is removed on stop. | Must | Verified | `session::tests::records_hold_no_secret_shaped_fields`, `round_trips_lists_and_removes`. |
+| DASHR-GRAF-009 | dashr keeps its state (sessions, watches, saved dashboards) in its own directory, not Herdr's plugin state directory: `DASHR_STATE_DIR`, else `%APPDATA%\\herdr-dashr\\state` on Windows, `$XDG_STATE_HOME/herdr-dashr`, `~/Library/Application Support/herdr-dashr` on macOS, or `~/.local/state/herdr-dashr`. The pane and every `dashr` command, including the AI session's, see the same sessions. | Must | Verified | `dashr_runtime::paths`; AC-AGENT in `scripts/e2e/run.sh` runs `dashr` without Herdr's plugin variables |
 
 ### 8.3 Datasources (DS)
 
@@ -219,6 +221,7 @@ Crates:
 | DASHR-MCP-008 | `promote` copies the dashboard to a configured persistent Grafana. | Should | Verified | Promote scenario in `scripts/e2e/run.sh` |
 | DASHR-MCP-009 | `watch_panel`, `list_watches` and `remove_watch` manage local alert rules. | Should | Verified | AC-ALERT in `scripts/e2e/run.sh`; `watches_are_managed_through_the_store` |
 | DASHR-MCP-010 | `screenshot` is refused unless every datasource the dashboard uses is non-personal. | Must | Verified | `screenshots_only_for_non_personal_dashboards`; AC-MASK (refused) and the browser-pane scenario (PNG returned) |
+| DASHR-MCP-011 | `dashr tool <name>` calls any dashr tool through the MCP server's own implementation and prints its JSON. It masks with the configuration of the pane that owns the session, and names the session by id or by dashboard pane id. `dashr wait` blocks until the pane's Grafana runs, then prints the session and briefing, never Grafana's address. | Must | Verified | `agent::tests`; AC-AGENT in `scripts/e2e/run.sh` (planted values never returned) |
 
 ### 8.7 Privacy and masking (PRIV)
 
@@ -279,10 +282,11 @@ Crates:
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
 | DASHR-SKILL-001 | The plugin ships a dashboard-building agent skill — the loop from question to verified dashboard, privacy rules, dashboard JSON, query models for every supported datasource, debugging recipes — embedded in the binary. | Must | Verified | `.agents/skills/herdr-dashr/`; `dashr_runtime::skill::FILES`; `skill_carries_the_marker_and_frontmatter` |
-| DASHR-SKILL-002 | The plugin's build step installs the skill for Claude Code, and the dashboard pane refreshes it before the agent starts; neither ever replaces or removes a skill dashr did not write, and the build step never fails the install. | Must | Verified | `herdr-plugin.toml` build step; `install_refresh_and_uninstall_respect_ownership`; skill scenario and AC-OPEN skill check in `scripts/e2e/run.sh` |
+| DASHR-SKILL-002 | The plugin's build step installs the skill for Claude Code with `npx skills add czinegeroland/herdr-dashr --skill herdr-dashr --agent claude-code --global` (through `cmd /c` on Windows), as herdr-remote-channel does. `dashr skill install` installs the embedded copy for other agents, never replaces a skill dashr did not write, and never fails when `--best-effort` is given. | Must | Implemented | `herdr-plugin.toml` build steps; `installs_from_npm_on_every_platform_including_windows`; `skills add` installed the skill into `~/.claude/skills/herdr-dashr` in a manual check; skill scenario in `scripts/e2e/run.sh` for `dashr skill install` |
 | DASHR-SKILL-003 | The same guide is served as MCP resources (`dashr://guide/...`) and named in the server instructions, so agents without skill support get it too. | Should | Verified | `resources_are_listed_and_read`, `resources_map_to_files`; skill scenario in `scripts/e2e/run.sh` |
 | DASHR-SKILL-005 | The skill covers OpenTelemetry sessions and log checks: the endpoint, `dashr tail`, the expectation tools, pattern rules and LogQL/TraceQL/PromQL for OTel data. | Should | Verified | `.agents/skills/herdr-dashr/reference/otel-and-logs.md`; skill scenario in `scripts/e2e/run.sh` (five resources) |
 | DASHR-SKILL-004 | Every example dashboard and query-model snippet in the skill is valid: examples pass dashr's validation, snippets parse, and the TestData example renders with every panel `ok` on a real Grafana. | Must | Verified | `every_dashboard_example_is_valid`, `every_query_model_snippet_is_json`; skill scenario in `scripts/e2e/run.sh` |
+| DASHR-SKILL-006 | The skill makes the human's own AI session the dashboard builder. It opens the dashboard pane beside itself (for a pasted CodePipeline link, for OpenTelemetry, or plain), waits for it, and builds with `dashr tool`, installing `dashr` with npm when it is missing. The human never leaves the conversation or opens a menu. | Must | Implemented | `.agents/skills/herdr-dashr/SKILL.md`; AC-AGENT runs the skill's commands; awaiting a real install |
 
 ### 8.13 OpenTelemetry (OTEL)
 
@@ -392,6 +396,7 @@ Crates:
 | DEC-036 | Configured datasources that reuse a uid of the OpenTelemetry image are left out of provisioning, with a warning, when OpenTelemetry mode is switched on at run time. The configuration check only runs when `[otel] enabled` is in the file, so the action and `--otel` let two datasources share a uid, and which one Grafana kept depended on file order (found while writing the saved-dashboards scenario, whose configuration has a `Loki` datasource). |
 | DEC-037 | One public release. The earlier v0.1.0 and v0.2.0 GitHub releases (never published to npm) are deleted with their tags, and the version returns to 0.1.0: the first release anyone installs is v0.1.0 with every feature to date. `Delete release` (`.github/workflows/delete-release.yml`, manual, the tag typed twice) removes a release and its tag for sessions that cannot delete tags. Ledger rows naming v0.2.0 and v0.3.0 describe work that is now part of v0.1.0. |
 | DEC-038 | The plugin installs the way herdr-remote-channel does: `platforms` includes Windows, the build step is `npm install --no-save herdr-dashr@<version>` (via `cmd /c` on Windows, where `npm` is `npm.cmd`), and entry points run `node node_modules/herdr-dashr/bin.js`, since `node` resolves under any spawning model. `sh scripts/install.sh` had been skipped by Herdr on the first Windows install, leaving a plugin with no binary. This supersedes DEC-028's choice of running `bin/dashr` without Node. On Windows the chat pane command is quoted for PowerShell, and there is no SIGHUP: the `pane.closed` hook and the startup reaper stop the container. `scripts/install.sh` remains a Unix standalone installer. |
+| DEC-039 | The human talks only to their own AI session, as with herdr-remote-channel. The plugin installs the skill with `npx skills add` from this repository. The skill has that session open the dashboard pane itself (`herdr plugin pane open`, split beside it), wait for it (`dashr wait`) and build with `dashr tool`, a command that runs the MCP tools' own implementation, so masking and privacy rules are one code path. A pane opened that way has no chat pane; the Herdr actions keep theirs. State moved out of Herdr's plugin state directory into dashr's own (herdr-remote-channel keeps its own home), because the AI session's `dashr` has no Herdr plugin variables. The pane records its configuration directory so `dashr tool` masks with the same rules. Sessions and saved dashboards in the old plugin state directory are not migrated. |
 
 ## 13. Open questions and risks
 
@@ -432,28 +437,29 @@ Crates:
 | 2026-09-27 | A chat pane that fails to open, or whose id fails to save, is reported on the text view: the view clears the screen, which had hidden the reason when AC-OPEN intermittently found no chat pane. | HERDR-002 |
 | 2026-09-27 | The fake-CLI unit tests create their scripts with `cp`, so a write handle can no longer leak into a parallel test's fork and fail the run with ETXTBSY ("Text file busy"), as it did on Linux CI. | none (test robustness) |
 | 2026-09-27 | The Windows npm package is published as `@czinegeroland/herdr-dashr-win32-x64`: npm's spam filter refused `herdr-dashr-win32-x64` on every attempt. The launcher maps each platform to its full package name. The v0.1.1 release is unchanged, and its publish is re-run with the new packaging. | TECH-005 |
+| 2026-09-27 | The human only talks to their AI session (DEC-039, mirroring herdr-remote-channel). The skill is installed with `npx skills add`. It opens the dashboard pane beside the session (for example for a pasted CodePipeline link), `dashr wait` hands over the session and briefing, and `dashr tool` builds with the masked tools. Panes opened this way have no chat pane. State moved to dashr's own directory, with Windows-aware defaults. New AC-AGENT end-to-end scenario. Version 0.1.2. | HERDR-010, GRAF-009, MCP-011, SKILL-002, SKILL-006 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 9 | 7 | 2 | 0 |
-| GRAF | 8 | 8 | 0 | 0 |
+| HERDR | 10 | 8 | 2 | 0 |
+| GRAF | 9 | 9 | 0 | 0 |
 | DS | 6 | 6 | 0 | 0 |
 | VIEW | 4 | 4 | 0 | 0 |
 | CHAT | 3 | 3 | 0 | 0 |
-| MCP | 10 | 10 | 0 | 0 |
+| MCP | 11 | 11 | 0 | 0 |
 | PRIV | 7 | 7 | 0 | 0 |
 | AWS | 6 | 6 | 0 | 0 |
 | ALERT | 5 | 5 | 0 | 0 |
 | PROMO | 3 | 3 | 0 | 0 |
-| SKILL | 5 | 5 | 0 | 0 |
+| SKILL | 6 | 4 | 2 | 0 |
 | OTEL | 6 | 6 | 0 | 0 |
 | LOGX | 5 | 5 | 0 | 0 |
 | LIB | 4 | 4 | 0 | 0 |
 | GOV/TECH | 8 | 6 | 2 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 97 | 93 | 4 | 0 |
+| **All** | 101 | 95 | 6 | 0 |
 
 ## 15. Acceptance criteria
 
@@ -473,6 +479,7 @@ Crates:
   `dashr tail` turn expected ones seen and the verdict passed; a forbidden
   line turns its tile red, fails the verdict and blocks the pane; the verdict
   never carries a line; clearing restores the dashboard and unblocks the pane.
+- **AC-AGENT** From an ordinary pane, the skill's commands open a dashboard pane beside it with no chat pane. `dashr wait` returns the session and a briefing (a pipeline's, when a link was given) without Grafana's address. `dashr tool` answers by pane id and never returns planted personal values. Closing the pane removes the session.
 - **AC-LIB** A dashboard saved by name in one pane loads into a later pane;
   an existing name is not replaced without asking; a dashboard needing a
   datasource the session lacks is refused, naming it, and nothing changes.

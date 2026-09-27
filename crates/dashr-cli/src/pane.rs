@@ -25,7 +25,7 @@ use dashr_runtime::status::PanelState;
 use serde_json::json;
 
 use crate::Result;
-use crate::herdr_cmds::{ORIGIN_CWD_ENV, OTEL_ENV, PIPELINE_ENV, load_config};
+use crate::herdr_cmds::{CHAT_ENV, ORIGIN_CWD_ENV, OTEL_ENV, PIPELINE_ENV, load_config};
 
 /// Reports monitor ticks to Herdr for one pane.
 struct HerdrReporter {
@@ -86,12 +86,37 @@ pub fn mcp_config(
     json!({"mcpServers": servers})
 }
 
+/// The briefing file in a session's runtime directory: what `dashr wait`
+/// hands the AI session that opened the pane (DEC-039).
+pub const BRIEF_FILE: &str = "brief.txt";
+
+/// Who reads the opening briefing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader {
+    /// The agent in the chat pane this pane opened, with the MCP tools.
+    ChatPane,
+    /// The human's own AI session, which opened this pane beside itself and
+    /// drives it with `dashr tool`.
+    Opener,
+}
+
 /// The opening prompt for the agent.
 pub fn opening_prompt(started: &Started, saved: &[String]) -> String {
-    let mut prompt = String::from(
-        "You are working in a herdr-dashr session: the pane above shows a live Grafana dashboard that only the human sees. \
-Use the dashr MCP tools and follow their privacy rules.",
-    );
+    briefing(started, saved, Reader::ChatPane)
+}
+
+/// The opening briefing for `reader`.
+pub fn briefing(started: &Started, saved: &[String], reader: Reader) -> String {
+    let mut prompt = String::from(match reader {
+        Reader::ChatPane => {
+            "You are working in a herdr-dashr session: the pane above shows a live Grafana dashboard that only the human sees. \
+Use the dashr MCP tools and follow their privacy rules."
+        }
+        Reader::Opener => {
+            "The dashboard pane is open beside you and shows a live Grafana dashboard that only the human sees. \
+Drive it with `dashr tool <name> --session <session> --args '<json>'` (tool names as in the herdr-dashr skill) and follow the skill's privacy rules."
+        }
+    });
     match &started.inventory {
         Some(Ok(inventory)) => prompt.push_str(&format!(
             " A first dashboard for CodePipeline {} ({}) is already applied: {} log groups, {} queues, {} state machines, {} Lambdas. \
@@ -122,10 +147,14 @@ Call panel_status, fix what is empty or failing, then ask the human what they ar
     }
     if let Some(otlp) = &started.record.otlp {
         prompt.push_str(&format!(
-            " This session also receives OpenTelemetry: logs, traces and metrics sent to {} (OTLP/HTTP; OTEL_EXPORTER_OTLP_ENDPOINT is set in your shell) land in its Loki, Tempo and Prometheus. \
+            " This session also receives OpenTelemetry: logs, traces and metrics sent to {} (OTLP/HTTP; {}) land in its Loki, Tempo and Prometheus. \
 `dashr tail -- <command>` ships any command's output as logs. When the human wants to check that the right log messages fire, arm them with expect_logs and read the verdict with log_expectations. \
 Ask the human what they are testing.",
-            otlp.http_endpoint()
+            otlp.http_endpoint(),
+            match reader {
+                Reader::ChatPane => "OTEL_EXPORTER_OTLP_ENDPOINT is set in your shell",
+                Reader::Opener => "set OTEL_EXPORTER_OTLP_ENDPOINT to it for programs you start",
+            }
         ));
     }
     prompt
@@ -302,10 +331,32 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         println!("dashr: {warning}");
     }
     let mut record = started.record.clone();
+    // A chat pane only when a Herdr action asked for one; a pane the human's
+    // AI session opened is driven by that session (DEC-039).
+    let chat = config.agent.enabled && std::env::var(CHAT_ENV).is_ok_and(|value| value == "1");
+    let saved: Vec<String> = dashr_core::library::Library::new(&paths.state_dir)
+        .list()
+        .into_iter()
+        .map(|summary| summary.name)
+        .collect();
+    // The AI session's `dashr tool` masks with this pane's configuration;
+    // written before the briefing, which `dashr wait` waits for.
+    let _ = std::fs::write(
+        record
+            .runtime_dir
+            .join(dashr_runtime::paths::CONFIG_DIR_FILE),
+        paths.config_dir.to_string_lossy().as_bytes(),
+    );
+    if let Err(error) = std::fs::write(
+        record.runtime_dir.join(BRIEF_FILE),
+        briefing(&started, &saved, Reader::Opener),
+    ) {
+        println!("dashr: could not write the briefing: {error}");
+    }
 
     // Keep the dashboard-building skill current before the agent starts
     // (DASHR-SKILL-002). Best effort: a failure is reported, not fatal.
-    if config.agent.enabled && config.agent.install_skill {
+    if chat && config.agent.install_skill {
         for dir in &config.agent.skill_dirs {
             let skills_dir = dashr_runtime::skill::expand_home(dir);
             match dashr_runtime::skill::install(&skills_dir, false) {
@@ -322,7 +373,7 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
     // Chat pane. A failure is kept for the text view, which clears the
     // screen and would otherwise hide it.
     let mut chat_note = String::new();
-    if config.agent.enabled && !stop.load(Ordering::SeqCst) {
+    if chat && !stop.load(Ordering::SeqCst) {
         let exe = std::env::current_exe().map_err(|error| error.to_string())?;
         let mcp_path = record.runtime_dir.join("mcp.json");
         let mcp = mcp_config(&record, &config, paths, &exe, &herdr_bin);
@@ -334,14 +385,7 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         let argv = agent_argv(
             &config.agent.command,
             &mcp_path,
-            &opening_prompt(
-                &started,
-                &dashr_core::library::Library::new(&paths.state_dir)
-                    .list()
-                    .into_iter()
-                    .map(|summary| summary.name)
-                    .collect::<Vec<_>>(),
-            ),
+            &opening_prompt(&started, &saved),
         );
         let cwd = std::env::var(ORIGIN_CWD_ENV)
             .ok()
