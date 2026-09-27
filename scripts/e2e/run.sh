@@ -171,8 +171,9 @@ for file in reference/dashboard-json.md reference/datasources.md reference/recip
 done
 ok "the dashboard pane installed the herdr-dashr skill before starting the agent"
 
-wait_for 30 "herdr pane read $PANE --source visible | grep -q 'Dashboard: http://127.0.0.1:$PORT/d/'" || fail "text view does not show the dashboard URL"
-wait_for 30 "herdr pane read $PANE --source visible | grep -q 'Heartbeat (TestData)'" || fail "text view does not list panels"
+wait_for 30 "herdr pane read $PANE --source visible | grep -q '^http://127.0.0.1:$PORT/d/[a-z0-9-]*\$'" || fail "the pane does not show the dashboard link on a line of its own"
+wait_for 30 "herdr pane read $PANE --source visible | grep -q 'panels [0-9]* ok'" || fail "the pane does not show panel health"
+herdr pane read "$PANE" --source visible | grep -q 'Heartbeat (TestData)' && fail "the pane lists panels; it should show only the link and health"
 ok "text view shows the kiosk URL and per-panel status"
 
 wait_for 30 "herdr pane get $PANE | grep -q '\"dashr\":\"[0-9]* ok'" || fail "no \$dashr sidebar token"
@@ -467,6 +468,9 @@ python3 -c 'import json,sys; assert not json.load(open(sys.argv[1])).get("chat_p
   "$(herdr pane get "$AGENT_PANE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["tab_id"])')" ] \
   || fail "the dashboard pane is not beside the AI session"
 ok "pane opened beside the AI session, no chat pane; dashr wait gave the session and the pipeline briefing"
+wait_for 20 "herdr pane layout --pane $APANE | python3 -c 'import json,sys; l=json.load(sys.stdin)[\"result\"][\"layout\"]; w={p[\"pane_id\"]: p[\"rect\"][\"width\"] for p in l[\"panes\"]}; t=w[\"$APANE\"]+w[\"$AGENT_PANE\"]; assert w[\"$APANE\"] <= 0.25 * t, w'" \
+  || { herdr pane layout --pane "$APANE"; fail "the dashboard pane is not a narrow column"; }
+ok "the dashboard pane narrowed itself to a column on the right"
 "${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool panel_status --session "$APANE" >"$WORK/astatus.json" || fail "dashr tool panel_status failed"
 grep -q '"DLQ orders-dlq"\|DLQ orders-dlq' "$WORK/astatus.json" || fail "panel_status does not list the pipeline panels"
 cat >"$WORK/aprobe.json" <<'EOF2'
@@ -480,7 +484,8 @@ for planted in planted.person@example.com second.person@example.org 203.0.113.77
 done
 grep -q '<email#1>' "$WORK/aprobe.out" || fail "probe_query samples are not masked pseudonyms"
 "${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool no_such_tool --session "$APANE" 2>/dev/null && fail "an unknown tool must exit non-zero"
-"${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool | grep -q '"apply_dashboard"' || fail "dashr tool does not list the tools"
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool >"$WORK/tools.json" || fail "dashr tool (the list) failed"
+grep -q '"apply_dashboard"' "$WORK/tools.json" || fail "dashr tool does not list the tools"
 ok "dashr tool drives the session by pane id; answers are masked like the MCP tools'"
 herdr pane close "$APANE" >/dev/null
 wait_for 30 "[ ! -e $ARECORD ]" || fail "the AI session's dashboard left its session behind"
@@ -513,7 +518,7 @@ EOF2
 OVOLUMES="$(docker inspect "$OCONTAINER" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}')"
 curl -fsS -H 'content-type: application/json' -d '{"resourceLogs":[]}' "http://127.0.0.1:$OTLP_HTTP/v1/logs" >/dev/null || fail "OTLP/HTTP does not accept logs"
 ok "one hardened otel-lgtm container; Grafana and OTLP (gRPC, HTTP) on loopback only; telemetry in anonymous volumes"
-wait_for 30 "herdr pane read $OPANE --source visible | grep -q 'OTLP:      http://127.0.0.1:$OTLP_HTTP'" || fail "text view does not show the OTLP endpoint"
+wait_for 30 "herdr pane read $OPANE --source visible | grep -q 'OTLP http://127.0.0.1:$OTLP_HTTP'" || fail "the pane does not show the OTLP endpoint"
 wait_for 30 "grep -q '\"chat_pane\": \"' $ORECORD" || fail "OpenTelemetry chat pane not recorded"
 OCHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("chat_pane") or "")' "$ORECORD")"
 herdr pane run "$OCHAT" 'echo "ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT"' >/dev/null
@@ -663,111 +668,83 @@ curl -fsS "http://127.0.0.1:$IPORT/api/datasources/uid/seq" | grep -q '"type":"y
 ok "custom image loads Infinity from outside the tmpfs; Seq provisioned through it"
 fi
 
-log "browser pane: terminal-browser in a kitty-graphics terminal"
-if ! command -v terminal-browser >/dev/null || [ "$(id -u)" = 0 ]; then
-  [ "${DASHR_E2E_BROWSER:-}" = 1 ] && fail "terminal-browser scenario required but terminal-browser is missing or running as root"
-  echo "  skipped: needs terminal-browser and a non-root user (set DASHR_E2E_BROWSER=1 to require it)"
+log "Chrome: the human opens the pane's link"
+# The human's own browser (DEC-040). A real Chrome, headless, driven over the
+# DevTools protocol only to look at what the human would see.
+CHROME="${DASHR_E2E_CHROME:-$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)}"
+[ -z "$CHROME" ] && [ -x /opt/pw-browsers/chromium-1194/chrome-linux/chrome ] && CHROME=/opt/pw-browsers/chromium-1194/chrome-linux/chrome
+if [ -z "$CHROME" ] || ! python3 -c 'import websocket' 2>/dev/null; then
+  [ "${DASHR_E2E_BROWSER:-}" = 1 ] && fail "Chrome scenario required but Chrome or websocket-client is missing"
+  echo "  skipped: needs Chrome and websocket-client (set DASHR_E2E_BROWSER=1 to require it)"
 else
   SOCK="$HOME/.config/herdr/sessions/$HERDR_SESSION/herdr.sock"
   ROOT_PANE="$(herdr pane list | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["panes"][0]["pane_id"])')"
-  BPANE="$(herdr pane split "$ROOT_PANE" --direction right --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
-  BCONF="$WORK/browser-config"
-  mkdir -p "$BCONF"
-  cat >"$BCONF/dashr.toml" <<EOF2
-[agent]
-enabled = false
-
-[monitor]
-interval_secs = 2
-EOF2
-  # The real pane process, in a terminal that answers kitty graphics queries.
-  # LANG is left unset on purpose: dashr must supply a usable browser locale.
-  env -u LANG -u LC_ALL HERDR_PANE_ID="$BPANE" HERDR_SOCKET_PATH="$SOCK" HERDR_BIN_PATH="$(command -v herdr)" \
-    python3 "$ROOT/scripts/e2e/kitty_term.py" "$WORK/term.json" 0 -- \
-    "$ROOT/bin/dashr" --config-dir "$BCONF" --state-dir "$STATE_DIR" herdr pane dashboard &
-  TERM_PID=$!
-  wait_for 90 "grep -l '\"pane_id\": \"$BPANE\"' $STATE_DIR/sessions/*.json" || fail "browser pane session did not start"
-  BRECORD="$(grep -l "\"pane_id\": \"$BPANE\"" "$STATE_DIR"/sessions/*.json | head -n 1)"
-  BSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$BRECORD")"
-  BUID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dashboard_uid"])' "$BRECORD")"
-  BRUNTIME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_dir"])' "$BRECORD")"
-  wait_for 60 "terminal-browser ls --all --json | grep -q '/d/$BUID'" || fail "terminal-browser is not showing the dashboard"
-  CDP="$(terminal-browser ls --all --json | python3 -c 'import json,sys; b=[b for b in json.load(sys.stdin)["browsers"] if any("/d/'"$BUID"'" in t["url"] for t in b["tabs"])]; print(b[0]["cdpPort"])')"
-  ok "terminal-browser opened the kiosk URL for $BUID"
-  [ -d "$BRUNTIME/browser" ] || fail "browser profile is not in the session runtime dir"
-  case "$BRUNTIME" in
-    /dev/shm/* | "${XDG_RUNTIME_DIR:-/nonexistent}"/*) ;;
-    *) [ "$(uname -s)" = Linux ] && fail "runtime dir $BRUNTIME is not memory-backed" ;;
-  esac
-  ok "browser profile lives in the session runtime dir ($BRUNTIME/browser)"
-  wait_for 60 "python3 $ROOT/scripts/e2e/cdp_eval.py $CDP /d/$BUID 'document.body.innerText' | grep -q 'Heartbeat (TestData)'" \
-    || { python3 "$ROOT/scripts/e2e/cdp_eval.py" "$CDP" "/d/$BUID" 'document.body.innerText' | head -5; fail "Grafana did not render the dashboard"; }
-  python3 "$ROOT/scripts/e2e/cdp_eval.py" "$CDP" "/d/$BUID" 'document.body.innerText' | grep -q 'unexpected error' && fail "Grafana shows an error page"
-  ok "Grafana rendered the welcome dashboard in the browser pane"
-  shot "$CDP" "/d/$BUID" 1-grafana-welcome
-
-  mkdir -p "$WORK/browser"
-  cat >"$WORK/browser/script.json" <<'EOF2'
-[
-  {"tool": "apply_dashboard", "arguments": {"dashboard": {"title": "browser check", "panels": [
-    {"id": 1, "type": "timeseries", "title": "Reloaded panel", "datasource": {"uid": "dashr-testdata"},
-     "targets": [{"refId": "A", "scenarioId": "random_walk"}]}]}}},
-  {"tool": "screenshot"}
-]
-EOF2
-  python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$BCONF" "$BSESSION" "$WORK/browser/script.json" >"$WORK/browser/mcp.out"
-  python3 - "$WORK/browser/mcp.out" <<'EOF2' || fail "browser MCP assertions failed"
+  pane_id() { python3 -c '
 import json, sys
-by = {json.loads(l)["tool"]: json.loads(l) for l in open(sys.argv[1])}
-applied = json.loads(by["apply_dashboard"]["text"])
-assert applied["browser_reloaded"] is True, applied
-assert not by["screenshot"]["isError"], by["screenshot"]["text"]
-assert "saved to" in by["screenshot"]["text"], by["screenshot"]["text"]
-EOF2
-  wait_for 30 "python3 $ROOT/scripts/e2e/cdp_eval.py $CDP /d/$BUID 'document.body.innerText' | grep -q 'Reloaded panel'" \
-    || fail "the browser did not reload into the new dashboard"
-  ok "apply_dashboard reloaded the browser into the new dashboard"
-  SHOT="$WORK/browser/script.json.screenshot.0.png"
-  python3 - "$SHOT" <<'EOF2' || fail "screenshot is not a real PNG"
-import sys
-data = open(sys.argv[1], "rb").read()
-assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
-assert len(data) > 5000, f"only {len(data)} bytes"
-EOF2
-  ok "screenshot tool returned a $(wc -c <"$SHOT") byte PNG of a non-personal dashboard"
+def find(v):
+    if isinstance(v, dict):
+        if "pane_id" in v: return v["pane_id"]
+        for inner in v.values():
+            found = find(inner)
+            if found: return found
+print(find(json.loads(sys.argv[1])) or "")' "$1"; }
+  link_of() { herdr pane read "$1" --source visible | grep -o '^http://127.0.0.1:[0-9]*/d/[a-z0-9-]*' | head -n 1; }
+  chrome() { # <devtools port> <profile dir> <url>
+    "$CHROME" --headless=new --no-sandbox --disable-gpu --window-size=1600,1000 --remote-debugging-port="$1" \
+      --user-data-dir="$2" "$3" >/dev/null 2>&1 &
+  }
+  eval_js() { python3 "$ROOT/scripts/e2e/cdp_eval.py" "$@"; }
 
-  kill -TERM "$TERM_PID"
-  wait "$TERM_PID" || true
-  wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$BSESSION" || fail "browser pane container still running"
-  [ ! -e "$BRUNTIME" ] || fail "runtime dir (with the browser profile) left behind"
-  [ ! -e "$BRECORD" ] || fail "browser pane session record left behind"
-  python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["frames"] > 0 and r["graphics_queries"] > 0, r' "$WORK/term.json" \
-    || fail "terminal-browser drew no kitty graphics frames"
-  ok "closing the terminal stopped Grafana and deleted the browser profile; $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["frames"])' "$WORK/term.json") frames were drawn"
+  BPANE="$(pane_id "$(herdr plugin pane open --plugin herdr-dashr --entrypoint dashboard --placement split \
+    --target-pane "$ROOT_PANE" --direction right --no-focus)")"
+  "${AGENT_ENV[@]}" "$ROOT/bin/dashr" wait --session "$BPANE" --timeout 120 >"$WORK/bwait.json" || fail "Chrome scenario pane did not start"
+  BSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session"])' "$WORK/bwait.json")"
+  wait_for 20 "[ -n \"\$(link_of $BPANE)\" ]" || fail "no link in the pane"
+  LINK="$(link_of "$BPANE")"
+  BUID="${LINK##*/d/}"
+  chrome 9311 "$WORK/chrome-1" "$LINK"
+  CHROME_PIDS="$!"
+  wait_for 60 "eval_js 9311 /d/$BUID 'document.body.innerText' | grep -q 'Heartbeat (TestData)'" \
+    || { eval_js 9311 "/d/$BUID" 'document.body.innerText' | head -5; fail "Chrome did not render the dashboard from the pane's link"; }
+  eval_js 9311 "/d/$BUID" 'document.body.innerText' | grep -q 'unexpected error' && fail "Grafana shows an error page"
+  ok "Ctrl-clicking the pane's link shows the dashboard in Chrome"
+  shot 9311 "/d/$BUID" 1-grafana-welcome
+  # The agent changes the dashboard; the open tab follows by itself.
+  eval_js 9311 "/d/$BUID" 'window.__dashrMark = 1' >/dev/null
+  cat >"$WORK/bapply.json" <<'EOF2'
+{"dashboard": {"title": "browser check", "panels": [
+  {"id": 1, "type": "timeseries", "title": "Changed by the agent", "datasource": {"uid": "dashr-testdata"},
+   "targets": [{"refId": "A", "scenarioId": "random_walk"}]}]}}
+EOF2
+  "${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool apply_dashboard --session "$BSESSION" --args-file "$WORK/bapply.json" >/dev/null || fail "apply_dashboard failed"
+  wait_for 30 "eval_js 9311 /d/$BUID 'document.body.innerText' | grep -q 'Changed by the agent'" \
+    || fail "the open Chrome tab did not follow the agent's change"
+  eval_js 9311 "/d/$BUID" 'String(window.__dashrMark)' | grep -q '^1$' || fail "the tab reloaded instead of updating in place"
+  ok "the open Chrome tab showed the agent's change within seconds, without a reload"
+  shot 9311 "/d/$BUID" 2-changed-by-the-agent
+  herdr pane close "$BPANE" >/dev/null
+  wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$BSESSION" || fail "Chrome scenario container still running"
 
-  log "browser pane: the live log trail highlights expected and forbidden lines"
-  OBPANE="$(herdr pane split "$ROOT_PANE" --direction right --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
-  OBCONF="$WORK/browser-otel-config"
-  mkdir -p "$OBCONF"
-  printf '[agent]\nenabled = false\n\n[monitor]\ninterval_secs = 2\n\n[otel]\nenabled = true\n' >"$OBCONF/dashr.toml"
-  env -u LANG -u LC_ALL HERDR_PANE_ID="$OBPANE" HERDR_SOCKET_PATH="$SOCK" HERDR_BIN_PATH="$(command -v herdr)" \
-    python3 "$ROOT/scripts/e2e/kitty_term.py" "$WORK/term-otel.json" 0 -- \
-    "$ROOT/bin/dashr" --config-dir "$OBCONF" --state-dir "$STATE_DIR" herdr pane dashboard &
-  OTERM_PID=$!
-  wait_for 150 "grep -l '\"pane_id\": \"$OBPANE\"' $STATE_DIR/sessions/*.json" || fail "OpenTelemetry browser pane did not start"
-  OBRECORD="$(grep -l "\"pane_id\": \"$OBPANE\"" "$STATE_DIR"/sessions/*.json | head -n 1)"
-  OBSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$OBRECORD")"
-  OBUID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dashboard_uid"])' "$OBRECORD")"
-  wait_for 60 "terminal-browser ls --all --json | grep -q '/d/$OBUID'" || fail "terminal-browser is not showing the OpenTelemetry dashboard"
-  OCDP="$(terminal-browser ls --all --json | python3 -c 'import json,sys; b=[b for b in json.load(sys.stdin)["browsers"] if any("/d/'"$OBUID"'" in t["url"] for t in b["tabs"])]; print(b[0]["cdpPort"])')"
-  DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" --config-dir "$OBCONF" --state-dir "$STATE_DIR" expect \
-    -p 'order = order \d+ created' -a 'exception' >/dev/null || fail "dashr expect failed"
-  wait_for 30 "python3 $ROOT/scripts/e2e/cdp_eval.py $OCDP /d/$OBUID 'document.body.innerText' | grep -q waiting" || fail "expectation tiles did not appear"
-  shot "$OCDP" "/d/$OBUID" 2-otel-expectations-armed
+  log "Chrome: the live log trail highlights expected and forbidden lines"
+  OBPANE="$(pane_id "$(herdr plugin pane open --plugin herdr-dashr --entrypoint dashboard --placement split \
+    --target-pane "$ROOT_PANE" --direction right --no-focus --env DASHR_OTEL=1)")"
+  "${AGENT_ENV[@]}" "$ROOT/bin/dashr" wait --session "$OBPANE" --timeout 150 >"$WORK/obwait.json" || fail "OpenTelemetry pane did not start"
+  OBSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session"])' "$WORK/obwait.json")"
+  "${AGENT_ENV[@]}" DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" expect -p 'order = order \d+ created' -a 'exception' >/dev/null \
+    || fail "dashr expect failed"
+  # Opened after arming, as the skill tells the human: the tab counts from
+  # the moment of arming.
+  wait_for 20 "[ -n \"\$(link_of $OBPANE)\" ]" || fail "no link in the OpenTelemetry pane"
+  OLINK="$(link_of "$OBPANE")"
+  OBUID="${OLINK##*/d/}"
+  chrome 9312 "$WORK/chrome-2" "$OLINK"
+  CHROME_PIDS="$CHROME_PIDS $!"
+  wait_for 60 "eval_js 9312 /d/$OBUID 'document.body.innerText' | grep -q waiting" || fail "expectation tiles did not appear in Chrome"
+  shot 9312 "/d/$OBUID" 3-otel-expectations-armed
   printf 'E2E order 1 created\nE2E exception boom\nE2E plain line\n' \
-    | DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" --state-dir "$STATE_DIR" tail --service web >/dev/null
+    | "${AGENT_ENV[@]}" DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" tail --service web >/dev/null
   trail_colours() {
-    python3 "$ROOT/scripts/e2e/cdp_eval.py" "$OCDP" "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")" | python3 -c '
+    eval_js 9312 "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")" | python3 -c '
 import json, re, sys
 colours = json.loads(sys.stdin.read())
 rgb = {k: [int(n) for n in re.findall(r"\d+", v)[:3]] if v.startswith("rgb") else None for k, v in colours.items()}
@@ -777,23 +754,21 @@ assert f and f[0] > f[1] + 50, colours
 assert p is None or abs(p[0] - p[1]) < 30, colours
 print(colours)'
   }
-  wait_for 60 trail_colours || { python3 "$ROOT/scripts/e2e/cdp_eval.py" "$OCDP" "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")"; fail "the live trail does not highlight the lines"; }
-  ok "live trail in the browser pane: expected line green, forbidden line red, other lines plain ($(trail_colours))"
-  shot "$OCDP" "/d/$OBUID" 3-otel-trail-highlighted
+  wait_for 60 trail_colours || { eval_js 9312 "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")"; fail "the live trail does not highlight the lines"; }
+  ok "live trail in Chrome: expected line green, forbidden line red, other lines plain ($(trail_colours))"
+  shot 9312 "/d/$OBUID" 4-otel-trail-highlighted
   # The page must pick up new lines by itself: Grafana ignores a refresh
   # interval missing from the dashboard's allowed list (DEC-034).
-  echo 'E2E order 2 created later' | DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" --state-dir "$STATE_DIR" tail --service web >/dev/null
-  wait_for 15 "python3 $ROOT/scripts/e2e/cdp_eval.py $OCDP /d/$OBUID 'document.body.innerText' | grep -q 'E2E order 2 created later'" \
+  echo 'E2E order 2 created later' | "${AGENT_ENV[@]}" DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" tail --service web >/dev/null
+  wait_for 15 "eval_js 9312 /d/$OBUID 'document.body.innerText' | grep -q 'E2E order 2 created later'" \
     || fail "the dashboard did not refresh by itself"
-  shot "$OCDP" "/d/$OBUID" 4-otel-trail-live
-  ok "the browser pane refreshes by itself: a new line appeared without a reload"
-  terminal-browser ls --all --json | grep -q "/d/$OBUID[^\"]*from=20[0-9-]*T" || fail "dashr expect did not move the browser to the armed time range"
-  python3 "$ROOT/scripts/e2e/cdp_eval.py" "$OCDP" "/d/$OBUID" 'document.body.innerText' | grep -q 'Invalid date' && fail "time picker shows an invalid date"
-  ok "dashr expect moved the browser to the armed time range"
-  kill -TERM "$OTERM_PID"
-  wait "$OTERM_PID" || true
-  wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$OBSESSION" || fail "OpenTelemetry browser pane container still running"
-  ok "closing the terminal stopped the OpenTelemetry container"
+  shot 9312 "/d/$OBUID" 5-otel-trail-live
+  ok "the Chrome tab refreshes by itself: a new line appeared without a reload"
+  eval_js 9312 "/d/$OBUID" 'document.body.innerText' | grep -q 'Invalid date' && fail "time picker shows an invalid date"
+  kill $CHROME_PIDS 2>/dev/null || true
+  herdr pane close "$OBPANE" >/dev/null
+  wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$OBSESSION" || fail "OpenTelemetry container still running"
+  ok "closing the pane stopped the OpenTelemetry container"
 fi
 
 log "all $PASS checks passed"

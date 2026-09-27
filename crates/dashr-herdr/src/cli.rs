@@ -85,6 +85,19 @@ pub mod argv {
         args
     }
 
+    pub fn pane_layout(pane: &str) -> Vec<String> {
+        owned(&["pane", "layout", "--pane", pane])
+    }
+
+    /// Moves `pane`'s split edge by `amount` (a share of the split) in
+    /// `direction`.
+    pub fn pane_resize(pane: &str, direction: &str, amount: f64) -> Vec<String> {
+        let mut args = owned(&["pane", "resize", "--pane", pane, "--direction", direction]);
+        args.push("--amount".into());
+        args.push(format!("{amount:.3}"));
+        args
+    }
+
     pub fn pane_run(pane: &str, command: &str) -> Vec<String> {
         owned(&["pane", "run", pane, command])
     }
