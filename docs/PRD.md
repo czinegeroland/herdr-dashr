@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T02:00:00Z |
+| Last updated | 2026-09-27T03:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -438,6 +438,7 @@ Crates:
 | 2026-09-27 | The fake-CLI unit tests create their scripts with `cp`, so a write handle can no longer leak into a parallel test's fork and fail the run with ETXTBSY ("Text file busy"), as it did on Linux CI. | none (test robustness) |
 | 2026-09-27 | The Windows npm package is published as `@czinegeroland/herdr-dashr-win32-x64`: npm's spam filter refused `herdr-dashr-win32-x64` on every attempt. The launcher maps each platform to its full package name. The v0.1.1 release is unchanged, and its publish is re-run with the new packaging. | TECH-005 |
 | 2026-09-27 | The human only talks to their AI session (DEC-039, mirroring herdr-remote-channel). The skill is installed with `npx skills add`. It opens the dashboard pane beside the session (for example for a pasted CodePipeline link), `dashr wait` hands over the session and briefing, and `dashr tool` builds with the masked tools. Panes opened this way have no chat pane. State moved to dashr's own directory, with Windows-aware defaults. New AC-AGENT end-to-end scenario. Version 0.1.2. | HERDR-010, GRAF-009, MCP-011, SKILL-002, SKILL-006 |
+| 2026-09-27 | Plain one-line descriptions: the npm package and the plugin manifest say "Live Grafana dashboards in a Herdr pane.", and the platform packages say "The dashr executable for <os> <cpu>.", as herdr-remote-channel's do. Version 0.1.3, because npm cannot change a published version's description. | none (wording) |
 
 ### Requirement completion summary
 

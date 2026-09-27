@@ -160,7 +160,7 @@ fn manifest(version: &'static str) -> Manifest {
         name: "Herdr Dashr",
         version,
         min_herdr_version: MIN_HERDR_VERSION,
-        description: "Agent-built, live Grafana dashboards in a Herdr pane, with masking between your data and the agent.",
+        description: "Live Grafana dashboards in a Herdr pane.",
         platforms: vec!["linux", "macos", "windows"],
         // No compiler and no shell: the executable comes from npm, one
         // package per platform with its own binary, as herdr-remote-channel
