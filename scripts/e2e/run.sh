@@ -335,7 +335,7 @@ python3 - "$WORK/example.out" <<'EOF2' || fail "skill resource or example assert
 import json, sys
 lines = [json.loads(l) for l in open(sys.argv[1])]
 uris = json.loads(next(l for l in lines if l["tool"] == "resources/list")["text"])
-assert "dashr://guide/SKILL.md" in uris and len(uris) == 7, uris
+assert "dashr://guide/SKILL.md" in uris and len(uris) == 8, uris
 reads = [l["text"] for l in lines if l["tool"] == "resources/read"]
 assert reads[0].startswith("---\nname: herdr-dashr") and "CloudWatch" in reads[1]
 init = json.loads(next(l for l in lines if l["tool"] == "initialize")["text"])
