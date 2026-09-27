@@ -30,7 +30,7 @@ pane beside you and builds the dashboard, then keeps changing it as you ask.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.1.2, on GitHub and npm, for Linux, macOS and Windows. Windows support and the AI-session flow are new; everything else is verified, most by an end-to-end
+**Status:** v0.1.3, on GitHub and npm, for Linux, macOS and Windows. Windows support and the AI-session flow are new; everything else is verified, most by an end-to-end
 suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
 
 ## Install

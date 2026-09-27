@@ -110,7 +110,7 @@ function main() {
         {
           name,
           version,
-          description: `The dashr executable (herdr-dashr) for ${platform.os} ${platform.cpu}.`,
+          description: `The dashr executable for ${platform.os} ${platform.cpu}.`,
           license: 'Apache-2.0',
           repository: { type: 'git', url: `git+${REPOSITORY}.git` },
           os: [platform.os],
@@ -135,7 +135,7 @@ function main() {
       {
         name: ROOT_PACKAGE,
         version,
-        description: 'Agent-built, live Grafana dashboards in a Herdr pane, with masking between your data and the agent.',
+        description: 'Live Grafana dashboards in a Herdr pane.',
         license: 'Apache-2.0',
         repository: { type: 'git', url: `git+${REPOSITORY}.git` },
         homepage: REPOSITORY,

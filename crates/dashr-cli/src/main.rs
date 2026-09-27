@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "dashr",
     version,
-    about = "Agent-built, live Grafana dashboards in a Herdr pane"
+    about = "Live Grafana dashboards in a Herdr pane"
 )]
 struct Cli {
     /// Configuration directory (default: HERDR_PLUGIN_CONFIG_DIR, then XDG).
