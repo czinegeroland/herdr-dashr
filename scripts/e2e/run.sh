@@ -334,7 +334,7 @@ python3 - "$WORK/example.out" <<'EOF2' || fail "skill resource or example assert
 import json, sys
 lines = [json.loads(l) for l in open(sys.argv[1])]
 uris = json.loads(next(l for l in lines if l["tool"] == "resources/list")["text"])
-assert "dashr://guide/SKILL.md" in uris and len(uris) == 5, uris
+assert "dashr://guide/SKILL.md" in uris and len(uris) == 7, uris
 reads = [l["text"] for l in lines if l["tool"] == "resources/read"]
 assert reads[0].startswith("---\nname: herdr-dashr") and "CloudWatch" in reads[1]
 init = json.loads(next(l for l in lines if l["tool"] == "initialize")["text"])
@@ -545,12 +545,12 @@ EOF2
 OVOLUMES="$(docker inspect "$OCONTAINER" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}')"
 curl -fsS -H 'content-type: application/json' -d '{"resourceLogs":[]}' "http://127.0.0.1:$OTLP_HTTP/v1/logs" >/dev/null || fail "OTLP/HTTP does not accept logs"
 ok "one hardened otel-lgtm container; Grafana and OTLP (gRPC, HTTP) on loopback only; telemetry in anonymous volumes"
-wait_for 30 "herdr pane read $OPANE --source visible | grep -q 'OTLP http://127.0.0.1:$OTLP_HTTP'" || fail "the pane does not show the OTLP endpoint"
+herdr pane read "$OPANE" --source visible | grep -q "OTLP" && fail "the pane shows the OTLP address, which is not a web page"
 wait_for 30 "grep -q '\"chat_pane\": \"' $ORECORD" || fail "OpenTelemetry chat pane not recorded"
 OCHAT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("chat_pane") or "")' "$ORECORD")"
 herdr pane run "$OCHAT" 'echo "ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT"' >/dev/null
 wait_for 20 "herdr pane read $OCHAT --source recent | grep -q 'ENDPOINT=http://127.0.0.1:$OTLP_HTTP'" || fail "chat pane lacks OTEL_EXPORTER_OTLP_ENDPOINT"
-ok "text view shows the endpoint; the chat pane exports OTEL_EXPORTER_OTLP_ENDPOINT"
+ok "the pane keeps the OTLP address to itself; the chat pane exports OTEL_EXPORTER_OTLP_ENDPOINT"
 
 echo '[{"tool": "list_saved_dashboards"}, {"tool": "load_dashboard", "arguments": {"name": "e2e pipeline"}}, {"tool": "get_dashboard"}]' >"$WORK/lib3.json"
 python3 "$ROOT/scripts/e2e/mcp_client.py" "$ROOT/bin/dashr" "$STATE_DIR" "$CONFIG_DIR" "$OSESSION" "$WORK/lib3.json" >"$WORK/lib3.out"
