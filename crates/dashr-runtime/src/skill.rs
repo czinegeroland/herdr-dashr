@@ -42,6 +42,10 @@ pub const FILES: &[(&str, &str)] = &[
         include_str!("../../../.agents/skills/herdr-dashr/reference/datasources.md"),
     ),
     (
+        "reference/databases.md",
+        include_str!("../../../.agents/skills/herdr-dashr/reference/databases.md"),
+    ),
+    (
         "reference/recipes.md",
         include_str!("../../../.agents/skills/herdr-dashr/reference/recipes.md"),
     ),

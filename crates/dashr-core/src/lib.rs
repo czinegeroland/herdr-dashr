@@ -9,6 +9,7 @@
 pub mod collect;
 pub mod config;
 pub mod dashboard;
+pub mod dbperf;
 pub mod frames;
 pub mod ids;
 pub mod library;

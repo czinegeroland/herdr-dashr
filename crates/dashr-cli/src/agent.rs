@@ -86,7 +86,7 @@ fn find(store: &SessionStore, session: Option<&str>) -> Result<Option<SessionRec
     }
 }
 
-fn require(store: &SessionStore, session: Option<&str>) -> Result<SessionRecord> {
+pub(crate) fn require(store: &SessionStore, session: Option<&str>) -> Result<SessionRecord> {
     find(store, session)?.ok_or_else(|| match session {
         Some(key) => format!(
             "no dashr session {key}; open the dashboard pane first (herdr plugin pane open --plugin herdr-dashr --entrypoint dashboard) and `dashr wait` for it"
@@ -221,7 +221,7 @@ pub fn tool(
     }
 }
 
-fn print(value: &Value) -> Result<()> {
+pub(crate) fn print(value: &Value) -> Result<()> {
     println!(
         "{}",
         serde_json::to_string_pretty(value).map_err(|error| error.to_string())?

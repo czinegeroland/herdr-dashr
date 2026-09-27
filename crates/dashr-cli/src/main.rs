@@ -1,6 +1,7 @@
 //! The `dashr` binary: Herdr plugin entrypoints and standalone commands.
 
 mod agent;
+mod db;
 mod doctor;
 mod herdr_cmds;
 mod pane;
@@ -92,6 +93,19 @@ enum Command {
         session: Option<String>,
         #[command(subcommand)]
         command: CollectCommand,
+    },
+    /// Database query performance for PostgreSQL and SQL Server: `add`
+    /// connects a database to the session's Grafana (a connection string, or
+    /// parts plus a password command and a tunnel command for cloud
+    /// databases reached through a CLI), `dashboard` prints its ready-made
+    /// dashboard, `plan` saves a SQL Server statement's plan for the human.
+    Db {
+        /// A session id or its dashboard pane id; defaults to $DASHR_SESSION,
+        /// else the only session.
+        #[arg(long, global = true)]
+        session: Option<String>,
+        #[command(subcommand)]
+        command: DbCommand,
     },
     /// Manage sessions without Herdr.
     Session {
@@ -185,6 +199,78 @@ enum Command {
         #[command(subcommand)]
         command: SkillCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub enum DbCommand {
+    /// Connect a database and start sampling it.
+    Add(Box<DbAdd>),
+    /// Print the database's dashboard, for `dashr tool apply_dashboard --args-file -`.
+    Dashboard {
+        name: String,
+        /// Added to panel ids, to merge the panels into another dashboard.
+        #[arg(long, default_value_t = 0)]
+        id_offset: u64,
+        /// Added to panel rows, to place the panels below existing ones.
+        #[arg(long, default_value_t = 0)]
+        y_offset: u64,
+    },
+    /// The session's databases and their collectors.
+    List,
+    /// Disconnect a database.
+    Remove { name: String },
+    /// Save a SQL Server statement's cached plan (`query_hash` from the
+    /// dashboard) as a `.sqlplan` file for the human.
+    Plan {
+        name: String,
+        query_hash: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+}
+
+#[derive(clap::Args)]
+pub struct DbAdd {
+    /// A short name, e.g. `orders`.
+    pub name: String,
+    /// A connection string (`postgres://…`, `host=… dbname=…`,
+    /// `Server=…;Database=…;User ID=…;Password=…`); `-` reads it from stdin.
+    #[arg(long, conflicts_with = "url_env")]
+    pub url: Option<String>,
+    /// An environment variable holding the connection string.
+    #[arg(long)]
+    pub url_env: Option<String>,
+    /// `postgres` or `mssql`, when giving parts instead of a string.
+    #[arg(long)]
+    pub engine: Option<String>,
+    #[arg(long)]
+    pub host: Option<String>,
+    #[arg(long)]
+    pub port: Option<u16>,
+    #[arg(long)]
+    pub database: Option<String>,
+    #[arg(long)]
+    pub user: Option<String>,
+    /// An environment variable holding the password.
+    #[arg(long)]
+    pub password_env: Option<String>,
+    /// A command printing the password (an RDS IAM token, a Secrets Manager
+    /// or Key Vault secret); the pane re-runs it every --refresh-secs.
+    #[arg(long)]
+    pub password_command: Option<String>,
+    #[arg(long, default_value_t = 600)]
+    pub refresh_secs: u64,
+    /// A command forwarding the database to --host:--port (an SSM port
+    /// forwarding session, `ssh -L`, `kubectl port-forward`); the pane keeps
+    /// it running.
+    #[arg(long)]
+    pub tunnel_command: Option<String>,
+    /// PostgreSQL sslmode, or SQL Server encrypt (true, false, disable).
+    #[arg(long)]
+    pub tls: Option<String>,
+    /// SQL Server: accept the server's certificate without validation.
+    #[arg(long)]
+    pub trust_server_certificate: bool,
 }
 
 #[derive(Subcommand)]
@@ -390,6 +476,24 @@ fn run(cli: Cli) -> Result<()> {
         Command::Discover => agent::discover(),
         Command::Collect { session, command } => {
             agent::collect(&paths, session.as_deref(), command)
+        }
+        Command::Db { session, command } => {
+            let session = session.as_deref();
+            match command {
+                DbCommand::Add(args) => db::add(&paths, session, *args),
+                DbCommand::Dashboard {
+                    name,
+                    id_offset,
+                    y_offset,
+                } => db::dashboard(&paths, session, &name, id_offset, y_offset),
+                DbCommand::List => db::list(&paths, session),
+                DbCommand::Remove { name } => db::remove(&paths, session, &name),
+                DbCommand::Plan {
+                    name,
+                    query_hash,
+                    out,
+                } => db::plan(&paths, session, &name, &query_hash, out),
+            }
         }
         Command::Wait { session, timeout } => agent::wait(
             &paths,
