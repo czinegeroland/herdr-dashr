@@ -6,7 +6,7 @@
 #   scripts/e2e/run.sh [path/to/dashr]
 #
 # Acceptance criteria covered: AC-OPEN, AC-MASK, AC-ALERT, AC-CLOSE,
-# AC-PIPELINE, AC-OTEL, AC-LOGX, AC-LIB, plus the startup reaper.
+# AC-PIPELINE, AC-AGENT, AC-OTEL, AC-LOGX, AC-LIB, plus the startup reaper.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -81,7 +81,9 @@ wait_for 20 herdr status server || fail "herdr server did not start"
 herdr workspace create --label e2e --cwd "$WORK" >/dev/null
 herdr plugin link "$ROOT" >/dev/null
 CONFIG_DIR="$(herdr plugin config-dir herdr-dashr | tail -n 1)"
-STATE_DIR="$HOME/.local/state/herdr/plugins/herdr-dashr"
+# dashr keeps its own state directory (DEC-039), shared by the pane and the
+# AI session's `dashr wait` / `dashr tool`.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-dashr"
 # Records left by an aborted earlier run would be mistaken for this run's.
 rm -rf "$STATE_DIR/sessions" "$STATE_DIR/dashboards"
 mkdir -p "$CONFIG_DIR"
@@ -427,6 +429,62 @@ wait_for 20 "! docker ps --format '{{.Names}}' | grep -q dashr-e2e-orphan" || fa
 docker ps --format '{{.Names}}' | grep -q dashr-e2e-foreign || fail "another server's container was reaped"
 docker rm -f dashr-e2e-foreign >/dev/null
 ok "orphan of this server reaped; another server's container left alone"
+
+log "AC-AGENT: the human's AI session opens and builds the dashboard"
+# Exactly what the skill tells the agent to run, from an ordinary pane: no
+# action, no chat pane, no --state-dir or --config-dir.
+AGENT_PANE="$(herdr pane list | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["panes"][0]["pane_id"])')"
+AGENT_ENV=(env -u HERDR_PLUGIN_CONFIG_DIR -u HERDR_PLUGIN_STATE_DIR HERDR_BIN_PATH="$(command -v herdr)"
+  HERDR_SOCKET_PATH="$HOME/.config/herdr/sessions/$HERDR_SESSION/herdr.sock" HERDR_PANE_ID="$AGENT_PANE")
+OPENED="$("${AGENT_ENV[@]}" herdr plugin pane open --plugin herdr-dashr --entrypoint dashboard \
+  --placement split --target-pane "$AGENT_PANE" --direction right --no-focus --env "DASHR_PIPELINE_URL=$URL")"
+APANE="$(python3 -c '
+import json, sys
+def find(value):
+    if isinstance(value, dict):
+        if "pane_id" in value: return value["pane_id"]
+        for inner in value.values():
+            found = find(inner)
+            if found: return found
+    return None
+print(find(json.loads(sys.argv[1])) or "")' "$OPENED")"
+[ -n "$APANE" ] || fail "herdr plugin pane open printed no pane id: $OPENED"
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" wait --session "$APANE" --timeout 120 >"$WORK/wait.json" \
+  || { herdr pane read "$APANE" --source recent | tail -20; fail "dashr wait did not see the pane's session"; }
+python3 - "$WORK/wait.json" "$APANE" <<'EOF2' || fail "dashr wait output is wrong"
+import json, sys
+out = json.load(open(sys.argv[1]))
+assert out["pane"] == sys.argv[2], out
+assert "beside you" in out["brief"] and "dashr tool" in out["brief"], out["brief"]
+assert "CodePipeline api" in out["brief"], out["brief"]
+assert "127.0.0.1" not in json.dumps(out), "the Grafana address must not reach the agent"
+EOF2
+ASESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session"])' "$WORK/wait.json")"
+ARECORD="$STATE_DIR/sessions/$ASESSION.json"
+python3 -c 'import json,sys; assert not json.load(open(sys.argv[1])).get("chat_pane")' "$ARECORD" \
+  || fail "a pane the AI session opened must not open a chat pane"
+[ "$(herdr pane get "$APANE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["tab_id"])')" = \
+  "$(herdr pane get "$AGENT_PANE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["tab_id"])')" ] \
+  || fail "the dashboard pane is not beside the AI session"
+ok "pane opened beside the AI session, no chat pane; dashr wait gave the session and the pipeline briefing"
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool panel_status --session "$APANE" >"$WORK/astatus.json" || fail "dashr tool panel_status failed"
+grep -q '"DLQ orders-dlq"\|DLQ orders-dlq' "$WORK/astatus.json" || fail "panel_status does not list the pipeline panels"
+cat >"$WORK/aprobe.json" <<'EOF2'
+{"datasource_uid": "dashr-testdata", "query": {"refId": "A", "scenarioId": "csv_content",
+ "csvContent": "email,message\nplanted.person@example.com,login from 203.0.113.77\nsecond.person@example.org,card 4111 1111 1111 1111"}}
+EOF2
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool probe_query --session "$ASESSION" --args-file "$WORK/aprobe.json" >"$WORK/aprobe.out" \
+  || fail "dashr tool probe_query failed"
+for planted in planted.person@example.com second.person@example.org 203.0.113.77 "4111 1111 1111 1111"; do
+  grep -q "$planted" "$WORK/aprobe.out" && fail "dashr tool leaked a planted value: $planted"
+done
+grep -q '<email#1>' "$WORK/aprobe.out" || fail "probe_query samples are not masked pseudonyms"
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool no_such_tool --session "$APANE" 2>/dev/null && fail "an unknown tool must exit non-zero"
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool | grep -q '"apply_dashboard"' || fail "dashr tool does not list the tools"
+ok "dashr tool drives the session by pane id; answers are masked like the MCP tools'"
+herdr pane close "$APANE" >/dev/null
+wait_for 30 "[ ! -e $ARECORD ]" || fail "the AI session's dashboard left its session behind"
+ok "closing the pane the AI session opened removes its session"
 
 log "AC-OTEL: one OpenTelemetry container per pane"
 herdr plugin action invoke herdr-dashr.otel >/dev/null

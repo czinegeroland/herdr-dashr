@@ -112,6 +112,36 @@ fn npm_install(prefix: &[&str], version: &str) -> Vec<String> {
         .collect()
 }
 
+/// The repository the agent skill is installed from.
+pub const REPOSITORY: &str = "czinegeroland/herdr-dashr";
+
+/// The argv that installs the agent skill for Claude Code, globally.
+///
+/// `skills add` reads `.agents/skills/herdr-dashr/` from the repository's
+/// default branch; it takes no tag or commit, so this step is not pinned to
+/// the manifest version (herdr-remote-channel's DEC-079). `npx` is
+/// `npx.cmd` on Windows, hence `cmd /c` there.
+fn skills_add(prefix: &[&str]) -> Vec<String> {
+    prefix
+        .iter()
+        .copied()
+        .chain([
+            "npx",
+            "--yes",
+            "skills",
+            "add",
+            REPOSITORY,
+            "--skill",
+            PLUGIN_ID,
+            "--agent",
+            "claude-code",
+            "--global",
+            "--yes",
+        ])
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The actions the manifest declares: `(id, title)`.
 pub const ACTIONS: &[(&str, &str)] = &[
     ("open", "Open live dashboard"),
@@ -145,13 +175,17 @@ fn manifest(version: &'static str) -> Manifest {
                 command: npm_install(&[], version),
                 platforms: Some(vec!["linux", "macos"]),
             },
-            // Installs the dashboard-building skill for Claude Code; never
-            // fails the install and never replaces a skill dashr did not
-            // write (DASHR-SKILL-002). The skill is embedded in the binary,
-            // so it matches the tools of this exact version.
+            // The agent skill, installed for Claude Code with the `skills`
+            // CLI straight from this repository, as herdr-remote-channel
+            // does (DEC-039). It teaches the human's own AI session to open
+            // the dashboard pane and drive it with `dashr`.
             Build {
-                command: dashr(&["skill", "install", "--best-effort"]),
-                platforms: None,
+                command: skills_add(&["cmd", "/c"]),
+                platforms: Some(vec!["windows"]),
+            },
+            Build {
+                command: skills_add(&[]),
+                platforms: Some(vec!["linux", "macos"]),
             },
         ],
         startup: vec![Hook {
@@ -269,10 +303,24 @@ mod tests {
         );
         assert_eq!(build[0]["platforms"][0].as_str(), Some("windows"));
         assert_eq!(argv(1)[0], "npm");
-        assert_eq!(
-            argv(2),
-            ["node", LAUNCHER, "skill", "install", "--best-effort"]
-        );
+        let skills = [
+            "npx",
+            "--yes",
+            "skills",
+            "add",
+            "czinegeroland/herdr-dashr",
+            "--skill",
+            "herdr-dashr",
+            "--agent",
+            "claude-code",
+            "--global",
+            "--yes",
+        ];
+        assert_eq!(argv(2)[..2], ["cmd", "/c"]);
+        assert_eq!(argv(2)[2..], skills);
+        assert_eq!(build[2]["platforms"][0].as_str(), Some("windows"));
+        assert_eq!(argv(3), skills);
+        assert_eq!(build.len(), 4);
         // Every entry point runs the launcher with node: no shell, no .cmd.
         assert!(!text.contains("\"sh\""));
         assert!(!text.contains("bin/dashr"));
