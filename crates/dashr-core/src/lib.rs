@@ -6,6 +6,7 @@
 //! of their inputs, which is what lets the privacy guarantees be unit tested
 //! without a Grafana or a Docker daemon.
 
+pub mod collect;
 pub mod config;
 pub mod dashboard;
 pub mod frames;

@@ -1,24 +1,62 @@
 ---
 name: herdr-dashr
 description: >-
-  Show the human a live Grafana dashboard in a Herdr pane beside you, and
-  build it with the `dashr` command line, without ever seeing real data
-  values. Use when the human asks to visualize, graph, chart or watch
-  something, asks for a dashboard, pastes an AWS CodePipeline link and asks to
-  see it, or wants to check that the right log messages fire. Open the pane
-  yourself and build the dashboard yourself; never send the human to a menu or
-  a terminal. Also use it when the dashr MCP tools are connected.
+  Build the human a live dashboard of whatever they point you at — an app
+  running on this machine, containers, a database, a Kubernetes cluster, an
+  AWS, Azure or Google Cloud deployment — in a Herdr pane beside you: discover
+  what runs and what data exists, start live collectors, and build the panels
+  a system engineer checks (CPU, memory, IO, request rate, errors, latency,
+  database load), without ever seeing real data values. Use when the human
+  asks to visualize, monitor, watch, graph or "show me" something, asks for a
+  dashboard, pastes a deployment or pipeline link, or wants to check that the
+  right log messages fire. Also use it when the dashr MCP tools are connected.
 metadata:
   generated-by: herdr-dashr
 ---
 
 # Live dashboards with herdr-dashr
 
-The human talks only to you. You open a dashboard pane beside yourself and
-design a live Grafana dashboard in it; Grafana fetches and refreshes the data
-itself, and **you only change the dashboard**. You never see data values —
-only schemas, masked samples, row counts and errors. Treat that as the
-physics of this environment, not an obstacle.
+The human talks only to you. You open a dashboard pane beside yourself, find
+out what is running and what can be measured, switch on live collectors, and
+design a Grafana dashboard from what they deliver. **The pane keeps the data
+flowing** — you never poll or loop — and **you only change the dashboard**.
+You never see data values: only schemas, masked samples, row counts and
+errors. Treat that as the physics of this environment, not an obstacle.
+
+The goal is a dashboard that feels like magic: the human names a thing, and
+seconds later sees its CPU, memory, traffic, errors, latency and database
+load, live, laid out the way an experienced engineer would.
+
+## The flow
+
+1. **Open the pane** (below) — always with `DASHR_OTEL=1`: its Prometheus and
+   Loki are where collectors write.
+2. **Discover.** Find out what the human means and what data exists before
+   drawing anything:
+   - on this machine: `dashr discover` (containers and their kind, request
+     log formats, `/metrics` endpoints, installed CLIs, cloud logins, project
+     files);
+   - anywhere else — a cloud, a cluster, a remote host: use its CLI
+     (`aws`, `az`, `gcloud`, `kubectl`, `ssh`, ...). Install a missing CLI
+     yourself; ask the human before logging in or changing their config.
+     `reference/environments.md` says what to look for in each.
+3. **Collect.** Switch on the collectors that deliver what the human asked
+   about (`reference/collectors.md`): `dashr collect docker`, `host`,
+   `process`, `logs <container>`, `postgres|mysql|redis <container>`,
+   `scrape <url>`, and for everything else `exec` (a command printing
+   Prometheus text on a schedule) and `stream` (a command printing log
+   lines). Each is tried once and reports the metric names it produced.
+4. **Build** the system dashboard (`reference/collectors.md`, "The system
+   dashboard"): a stat row of health, then per service CPU, memory, network
+   and disk IO, request rate, error %, p95 latency; a database row when there
+   is one; recent errors from the logs. Then the panels specific to the
+   human's question.
+5. **Verify** with `panel_status`; fix or remove every panel that is not `ok`.
+6. **Evolve** as the human reacts — add a collector, a drill-down, a watch.
+
+**Never generate traffic to measure it.** Do not probe, curl or load-test the
+human's services to fill a panel: it pollutes their logs and metrics. Measure
+what already happens. If there is no traffic, say so.
 
 ## Opening the dashboard
 
@@ -28,19 +66,14 @@ failure this section exists to prevent.
 
 ```bash
 "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin herdr-dashr --entrypoint dashboard \
-  --placement split --target-pane "$HERDR_PANE_ID" --direction right --no-focus
+  --placement split --target-pane "$HERDR_PANE_ID" --direction right --no-focus \
+  --env DASHR_OTEL=1
 ```
 
 `HERDR_PANE_ID` is your own pane, so the dashboard opens beside you rather
-than beside whatever pane has focus.
-
-Add one `--env` for what the human asked for:
-
-| The human | Add |
-|---|---|
-| pasted an AWS CodePipeline console link ("visualize it on a dashboard") | `--env DASHR_PIPELINE_URL=<the link>` |
-| wants live logs, traces or metrics from code they run, or to check log messages | `--env DASHR_OTEL=1` |
-| anything else | nothing |
+than beside whatever pane has focus. When the human pasted an AWS
+CodePipeline console link, also add `--env DASHR_PIPELINE_URL=<the link>`:
+dashr then inspects the pipeline's stacks and applies a first dashboard.
 
 The command prints JSON; the new pane's id is its `pane_id`. The first start
 pulls the Grafana image, so wait for it:
@@ -49,15 +82,14 @@ pulls the Grafana image, so wait for it:
 dashr wait --session <pane_id>
 ```
 
-`dashr wait` prints the `session` id and a `brief`: what is already on the
-dashboard (for a pipeline, a first dashboard of its stages, Lambdas, queues
-and log groups) and what to do next. The pane is a narrow column showing the
-dashboard's link; the human Ctrl-clicks it to open Grafana in their browser.
-Say that in one line, then build.
+`dashr wait` prints the `session` id and a `brief`. The pane is a narrow
+column showing the dashboard's link and how many collectors are live; the
+human Ctrl-clicks the link to watch the dashboard in their browser, which
+follows every change you make. Say that in one line, then discover.
 
-The human closes the pane when they are done; closing it deletes the
-Grafana and everything in it. Close it yourself only when asked:
-`herdr pane close <pane_id>`.
+The human closes the pane when they are done; closing it stops every
+collector and deletes the Grafana and everything in it. Close it yourself
+only when asked: `herdr pane close <pane_id>`.
 
 ## Before you start
 
@@ -94,7 +126,7 @@ long — a whole dashboard — and on Windows, where quoting JSON in a shell is
 fragile. Inside a dashr chat pane the same tools are connected as MCP tools
 with the same names and arguments; use those there.
 
-## The loop
+## Building, step by step
 
 Work in short iterations. A useful dashboard in two minutes beats a perfect
 one in twenty.
@@ -102,7 +134,7 @@ one in twenty.
 1. **Understand the question.** What is the human debugging? A deploy, an
    error spike, a queue backing up, slow requests? Ask one short question if
    it is unclear; otherwise start.
-2. **Discover.** `list_datasources` (uids, types, which are personal). Then
+2. **Probe.** `list_datasources` (uids, types, which are personal). Then
    `probe_query` the data you think answers the question — it returns field
    names, types, row counts and masked samples. Two or three probes are
    usually enough. See `reference/datasources.md` for each query model.
@@ -167,7 +199,9 @@ human can see them.
 | `expect_logs` / `log_expectations` / `clear_log_expectations` | "Did the right log messages fire?" — tiles per expected (or forbidden) message, a highlighted live trail, a counts-only verdict. |
 
 The same references are available as MCP resources (`dashr://guide/...`) if
-this skill's files are not on disk.
+this skill's files are not on disk. Collectors, their metric names and the
+system dashboard are in `reference/collectors.md`; discovering and feeding
+clouds, clusters and remote hosts is in `reference/environments.md`.
 
 ## OpenTelemetry sessions and log checks
 

@@ -8,6 +8,8 @@
 
 pub mod apply;
 pub mod browser;
+pub mod collect;
+pub mod discover;
 pub mod library;
 pub mod logx;
 pub mod monitor;

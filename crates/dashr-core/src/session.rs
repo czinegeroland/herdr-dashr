@@ -150,6 +150,13 @@ impl SessionStore {
             .join(format!("{}.logx.json", crate::ids::sanitize(session_id)))
     }
 
+    fn collectors_path(&self, session_id: &str) -> PathBuf {
+        self.dir.join(format!(
+            "{}.collectors.json",
+            crate::ids::sanitize(session_id)
+        ))
+    }
+
     fn io(path: &Path) -> impl FnOnce(std::io::Error) -> SessionError + '_ {
         move |source| SessionError::Io {
             path: path.display().to_string(),
@@ -200,6 +207,7 @@ impl SessionStore {
                 path.extension().is_some_and(|ext| ext == "json")
                     && !path.to_string_lossy().ends_with(".watches.json")
                     && !path.to_string_lossy().ends_with(".logx.json")
+                    && !path.to_string_lossy().ends_with(".collectors.json")
             })
             .filter_map(|path| std::fs::read(path).ok())
             .filter_map(|text| serde_json::from_slice(&text).ok())
@@ -220,6 +228,23 @@ impl SessionStore {
         let _ = std::fs::remove_file(self.record_path(session_id));
         let _ = std::fs::remove_file(self.watch_path(session_id));
         let _ = std::fs::remove_file(self.logx_path(session_id));
+        let _ = std::fs::remove_file(self.collectors_path(session_id));
+    }
+
+    /// The session's collectors, in the order they were added (DEC-043).
+    pub fn load_collectors(&self, session_id: &str) -> Vec<crate::collect::Collector> {
+        std::fs::read(self.collectors_path(session_id))
+            .ok()
+            .and_then(|text| serde_json::from_slice(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_collectors(
+        &self,
+        session_id: &str,
+        collectors: &[crate::collect::Collector],
+    ) -> Result<(), SessionError> {
+        self.write_json(&self.collectors_path(session_id), &collectors)
     }
 
     /// The armed log expectations, when there are any.

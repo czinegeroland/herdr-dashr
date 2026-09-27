@@ -9,6 +9,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use dashr_core::collect::Collector;
 use dashr_core::ids;
 use dashr_core::session::{SessionRecord, SessionStore};
 use dashr_herdr::Herdr;
@@ -313,4 +314,104 @@ mod tests {
         assert_eq!(decode_base64("aGk").unwrap(), b"hi");
         assert!(decode_base64("a*b").is_none());
     }
+}
+
+/// `dashr discover`.
+pub fn discover() -> Result<()> {
+    let cwd = std::env::var(crate::herdr_cmds::ORIGIN_CWD_ENV)
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|dir| dir.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| ".".into());
+    print(&dashr_runtime::discover::discover(&cwd))
+}
+
+/// The health file the pane writes into a session's runtime directory.
+pub const COLLECTOR_HEALTH_FILE: &str = "collectors-health.json";
+
+fn to_collector(command: crate::CollectCommand) -> Option<Collector> {
+    use crate::CollectCommand as C;
+    Some(match command {
+        C::Docker { containers } => Collector::Docker { containers },
+        C::Host => Collector::Host,
+        C::Process { name } => Collector::Process { name },
+        C::Logs { container, service } => Collector::Stream {
+            service: service.unwrap_or_else(|| container.clone()),
+            command: ["docker", "logs", "-f", "--tail", "0", container.as_str()]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+        },
+        C::Stream { service, command } => Collector::Stream { service, command },
+        C::Exec {
+            service,
+            every,
+            command,
+        } => Collector::Exec {
+            service,
+            every_secs: every,
+            command,
+        },
+        C::Scrape { url, service } => Collector::Scrape {
+            service: service.unwrap_or_else(|| "scrape".into()),
+            url,
+        },
+        C::Postgres { container } => Collector::Postgres { container },
+        C::Mysql { container } => Collector::Mysql { container },
+        C::Redis { container } => Collector::Redis { container },
+        C::List | C::Remove { .. } => return None,
+    })
+}
+
+/// `dashr collect ...`: tries the collector once, then records it for the
+/// pane, which keeps it running (DEC-043).
+pub fn collect(paths: &Paths, session: Option<&str>, command: crate::CollectCommand) -> Result<()> {
+    let store = SessionStore::new(&paths.state_dir);
+    let record = require(&store, session)?;
+    let mut collectors = store.load_collectors(&record.session_id);
+    match command {
+        crate::CollectCommand::List => {
+            let health: Value = std::fs::read(record.runtime_dir.join(COLLECTOR_HEALTH_FILE))
+                .ok()
+                .and_then(|text| serde_json::from_slice(&text).ok())
+                .unwrap_or_else(|| json!({}));
+            let list: Vec<Value> = collectors
+                .iter()
+                .map(|c| {
+                    let id = c.id();
+                    json!({"id": id, "collector": c, "status": health.get(&id).cloned().unwrap_or(json!("starting"))})
+                })
+                .collect();
+            return print(&json!(list));
+        }
+        crate::CollectCommand::Remove { id } => {
+            let before = collectors.len();
+            collectors.retain(|c| c.id() != id);
+            if collectors.len() == before {
+                return Err(format!("no collector {id}; see `dashr collect list`"));
+            }
+            store
+                .save_collectors(&record.session_id, &collectors)
+                .map_err(|error| error.to_string())?;
+            return print(&json!({"removed": id}));
+        }
+        _ => {}
+    }
+    if record.otlp.is_none() {
+        return Err("this session has no Prometheus or Loki to collect into; open the dashboard pane with `--env DASHR_OTEL=1`".into());
+    }
+    let collector = to_collector(command).ok_or("unknown collector")?;
+    let trial = dashr_runtime::collect::trial(&collector)?;
+    let id = collector.id();
+    collectors.retain(|c| c.id() != id);
+    collectors.push(collector);
+    store
+        .save_collectors(&record.session_id, &collectors)
+        .map_err(|error| error.to_string())?;
+    print(&json!({
+        "added": id,
+        "trial": trial,
+        "note": "The dashboard pane now collects this every few seconds; query the metric names above in panels (Prometheus datasource) and the service's logs in Loki."
+    }))
 }

@@ -77,6 +77,29 @@ The agent gets these MCP tools: `list_datasources`, `probe_query`,
 `watch_panel`, `list_watches`, `remove_watch`, `screenshot` (non-personal
 dashboards only), `open_for_pipeline`, `promote`.
 
+## Live data
+
+Your agent starts with `dashr discover` (what runs here: containers and their
+kind, request log formats, `/metrics` endpoints, installed cloud CLIs) and
+switches on collectors that the dashr pane runs for as long as it is open:
+
+```bash
+dashr collect docker                      # CPU, memory, network, disk per container
+dashr collect host                        # this machine
+dashr collect process dotnet              # an app run without Docker
+dashr collect logs api                    # log lines + request rate, errors, p95 from them
+dashr collect postgres db                 # also mysql, redis
+dashr collect scrape http://localhost:9090/metrics --service app
+dashr collect exec --service aws --every 60 -- python3 aws-metrics.py
+dashr collect stream --service api -- kubectl logs -f deploy/api
+dashr collect list
+```
+
+`exec` (any command printing Prometheus text) and `stream` (any command
+printing log lines) are how clouds, clusters and remote hosts get onto the
+dashboard: the agent writes them around `aws`, `az`, `gcloud`, `kubectl` or
+`ssh`.
+
 ## Configure
 
 `dashr config example` prints a commented `dashr.toml`; put it in the

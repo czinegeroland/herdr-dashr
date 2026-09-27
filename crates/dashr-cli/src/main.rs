@@ -78,6 +78,21 @@ enum Command {
         #[command(subcommand)]
         command: GlobalCommand,
     },
+    /// What is running here and what can be measured: containers, their
+    /// kind and log formats, metrics endpoints, installed CLIs, project
+    /// files, and the `dashr collect` commands that would make them live.
+    Discover,
+    /// Live data for a session's dashboard, collected by its pane: `docker`,
+    /// `host`, `process`, `logs`, `stream`, `exec`, `scrape`, `postgres`,
+    /// `mysql`, `redis`; `list` and `remove` manage them.
+    Collect {
+        /// A session id or its dashboard pane id; defaults to $DASHR_SESSION,
+        /// else the only session.
+        #[arg(long, global = true)]
+        session: Option<String>,
+        #[command(subcommand)]
+        command: CollectCommand,
+    },
     /// Manage sessions without Herdr.
     Session {
         #[command(subcommand)]
@@ -170,6 +185,60 @@ enum Command {
         #[command(subcommand)]
         command: SkillCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub enum CollectCommand {
+    /// CPU, memory, network and disk IO of containers (all running ones
+    /// when none are named).
+    Docker { containers: Vec<String> },
+    /// This machine's CPU, memory, disks and network.
+    Host,
+    /// Processes whose name contains NAME (e.g. `dotnet`, `node`).
+    Process { name: String },
+    /// A container's log: lines to Loki, request rate, errors and latency
+    /// from them (`docker logs -f`).
+    Logs {
+        container: String,
+        #[arg(long)]
+        service: Option<String>,
+    },
+    /// Any long-running command that prints log lines, e.g.
+    /// `kubectl logs -f deploy/api`, `aws logs tail --follow /ecs/api`,
+    /// `az webapp log tail`, `gcloud logging tail`.
+    Stream {
+        #[arg(long)]
+        service: String,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Any command, run every --every seconds, that prints Prometheus text
+    /// (`name{label="v"} 1.5` lines): the adapter for clouds and anything
+    /// else.
+    Exec {
+        #[arg(long)]
+        service: String,
+        #[arg(long, default_value_t = 60)]
+        every: u64,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+    },
+    /// A Prometheus /metrics endpoint.
+    Scrape {
+        url: String,
+        #[arg(long)]
+        service: Option<String>,
+    },
+    /// A Postgres container.
+    Postgres { container: String },
+    /// A MySQL or MariaDB container.
+    Mysql { container: String },
+    /// A Redis container.
+    Redis { container: String },
+    /// The session's collectors and whether each one is working.
+    List,
+    /// Stop a collector (its id as `list` shows it).
+    Remove { id: String },
 }
 
 #[derive(Subcommand)]
@@ -318,6 +387,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::Global {
             command: GlobalCommand::Install { best_effort },
         } => standalone::global_install(best_effort),
+        Command::Discover => agent::discover(),
+        Command::Collect { session, command } => {
+            agent::collect(&paths, session.as_deref(), command)
+        }
         Command::Wait { session, timeout } => agent::wait(
             &paths,
             session.as_deref(),
