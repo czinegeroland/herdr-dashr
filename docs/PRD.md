@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T13:00:00Z |
+| Last updated | 2026-09-27T18:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -164,6 +164,7 @@ Crates:
 | DASHR-HERDR-008 | The plugin declares and supports Linux, macOS and Windows. | Must | Implemented | Manifest `platforms`; unit tests on all three in `.github/workflows/build-and-test.yml` (Windows also run under Wine before merging); e2e on Linux; a real Windows install pending |
 | DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
 | DASHR-HERDR-010 | A dashboard pane the human's AI session opens itself (`herdr plugin pane open --plugin herdr-dashr --entrypoint dashboard`, split beside it) opens no chat pane: that session drives it. Only the Herdr actions open a chat pane with its own agent. The pane writes the briefing `dashr wait` hands the session. | Must | Verified | AC-AGENT in `scripts/e2e/run.sh` |
+| DASHR-HERDR-011 | Installing the plugin also installs the `dashr` command globally at the plugin's own version (`dashr global install --best-effort`, which runs `npm install -g herdr-dashr@<version>`, through `cmd /c` on Windows), so the human's AI session can run it without a manual step. A failed global install is reported with the command to run by hand, and never fails the plugin install. | Must | Implemented | `herdr-plugin.toml` build step; `installs_this_version_through_cmd_on_windows`, `installs_from_npm_on_every_platform_including_windows`; best-effort path checked by hand; awaiting a real install |
 
 ### 8.2 Grafana lifecycle (GRAF)
 
@@ -284,7 +285,7 @@ Crates:
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
 | DASHR-SKILL-001 | The plugin ships a dashboard-building agent skill — the loop from question to verified dashboard, privacy rules, dashboard JSON, query models for every supported datasource, debugging recipes — embedded in the binary. | Must | Verified | `.agents/skills/herdr-dashr/`; `dashr_runtime::skill::FILES`; `skill_carries_the_marker_and_frontmatter` |
-| DASHR-SKILL-002 | The plugin's build step installs the skill for Claude Code with `npx skills add czinegeroland/herdr-dashr --skill herdr-dashr --agent claude-code --global` (through `cmd /c` on Windows), as herdr-remote-channel does. `dashr skill install` installs the embedded copy for other agents, never replaces a skill dashr did not write, and never fails when `--best-effort` is given. | Must | Implemented | `herdr-plugin.toml` build steps; `installs_from_npm_on_every_platform_including_windows`; `skills add` installed the skill into `~/.claude/skills/herdr-dashr` in a manual check; skill scenario in `scripts/e2e/run.sh` for `dashr skill install` |
+| DASHR-SKILL-002 | The plugin's build step installs the skill with `npx skills add czinegeroland/herdr-dashr --skill herdr-dashr --global` (through `cmd /c` on Windows), for every coding agent `skills` detects on the machine: one copy in `~/.agents/skills`, read by Codex, Amp, Cline and others, and linked into Claude Code. `dashr skill install` installs the embedded copy, never replaces a skill dashr did not write, and never fails when `--best-effort` is given. | Must | Implemented | `herdr-plugin.toml` build steps; `installs_from_npm_on_every_platform_including_windows`; in a manual check with Claude Code and Codex present, `skills add` installed into `~/.agents/skills/herdr-dashr` and linked `~/.claude/skills/herdr-dashr` (exit 0); skill scenario in `scripts/e2e/run.sh` for `dashr skill install` |
 | DASHR-SKILL-003 | The same guide is served as MCP resources (`dashr://guide/...`) and named in the server instructions, so agents without skill support get it too. | Should | Verified | `resources_are_listed_and_read`, `resources_map_to_files`; skill scenario in `scripts/e2e/run.sh` |
 | DASHR-SKILL-005 | The skill covers OpenTelemetry sessions and log checks: the endpoint, `dashr tail`, the expectation tools, pattern rules and LogQL/TraceQL/PromQL for OTel data. | Should | Verified | `.agents/skills/herdr-dashr/reference/otel-and-logs.md`; skill scenario in `scripts/e2e/run.sh` (five resources) |
 | DASHR-SKILL-004 | Every example dashboard and query-model snippet in the skill is valid: examples pass dashr's validation, snippets parse, and the TestData example renders with every panel `ok` on a real Grafana. | Must | Verified | `every_dashboard_example_is_valid`, `every_query_model_snippet_is_json`; skill scenario in `scripts/e2e/run.sh` |
@@ -401,6 +402,7 @@ Crates:
 | DEC-039 | The human talks only to their own AI session, as with herdr-remote-channel. The plugin installs the skill with `npx skills add` from this repository. The skill has that session open the dashboard pane itself (`herdr plugin pane open`, split beside it), wait for it (`dashr wait`) and build with `dashr tool`, a command that runs the MCP tools' own implementation, so masking and privacy rules are one code path. A pane opened that way has no chat pane; the Herdr actions keep theirs. State moved out of Herdr's plugin state directory into dashr's own (herdr-remote-channel keeps its own home), because the AI session's `dashr` has no Herdr plugin variables. The pane records its configuration directory so `dashr tool` masks with the same rules. Sessions and saved dashboards in the old plugin state directory are not migrated. |
 | DEC-040 | The dashboard pane shows a link instead of a browser. The human opens Grafana in their own browser (Chrome), which is a better experience than a terminal renderer. An open tab follows every dashboard change by itself through Grafana Live, verified with a real Chrome, so the pane needs no reload hook. terminal-browser has no Windows build and no public license, so it could not be bundled or pinned. The pane narrows itself to a fifth of its split and shows only the link, panel health, alerts and the OTLP endpoint. This supersedes the terminal-browser parts of DEC-034 and the browser-profile handling. The `screenshot` tool still uses terminal-browser if it happens to be installed. |
 | DEC-041 | The human sees only the dashboard. Kiosk mode hides Grafana's menus, but Esc brings back all of Grafana, and anonymous visitors are admins (dashr's own API calls rely on that). Grafana's shared ("public") dashboard view shows one dashboard and nothing else, even after Esc, but it does not follow changes. So the pane serves a small loopback page: the shared dashboard filling the window, reloaded when the saved dashboard version changes (polled every 2 s). The reload also brings in a time range the agent set, such as log checks' "since arming". The page answers only `/` and `/version`. Checked with a real Chrome: kiosk exits to the full UI on Esc; the shared view shows no Grafana UI and needs a reload to change. |
+| DEC-042 | First public release, 1.0.0. The README is a short landing page (what it is, one install command) modelled on tsk; configuration, privacy and the CLI moved to `docs/USAGE.md`, development to `CONTRIBUTING.md`. The one-line description is the same everywhere (npm, `herdr-plugin.toml`, GitHub About): "Live Grafana dashboards your AI agent builds, right beside your chat in Herdr." The manifest follows tsk's style (a one-line header, `name = "herdr-dashr"`, a description on every action, the dashboard pane as a split) and is still generated. herdr.dev/plugins lists repositories with the `herdr-plugin` topic and a valid manifest; the card shows the GitHub description. The 0.1.x npm versions were tests and are unpublished with `Unpublish from npm` (manual, pre-1.0 versions only, within npm's 72-hour window). The skill is installed for every detected agent, not only Claude Code; `--agent '*'` was rejected because it created about 70 agent folders in HOME. |
 
 ## 13. Open questions and risks
 
@@ -446,12 +448,14 @@ Crates:
 | 2026-09-27 | The pane shows a link, not a browser (DEC-040). It is a narrow column that sizes itself, with the link, panel health, alerts and the OTLP endpoint. terminal-browser is dropped from the pane, the doctor and CI. The e2e browser scenarios now open the pane's link in a real Chrome and check that the tab follows the agent's changes without reloading. Version 0.1.4. | VIEW-001, VIEW-002, VIEW-003, VIEW-004, SEC-005 |
 | 2026-09-27 | Pane watchdog: the pane process checks every monitor tick that its pane still exists. After two misses it stops Grafana, deletes its files and exits. On Windows an orphaned `dashr.exe` had kept the container running and made `herdr plugin uninstall` fail with OS error 32. Version 0.1.5. | GRAF-010 |
 | 2026-09-27 | Dashboard-only page (DEC-041). The pane's link opens a loopback page showing Grafana's shared view of the dashboard, with no Grafana UI, not even after Esc. It reloads the dashboard within about 2 s of every change. The e2e Chrome scenario checks that no Grafana menu word is visible. Released with 0.1.5. | VIEW-001, VIEW-002, VIEW-004, VIEW-005 |
+| 2026-09-27 | The plugin install also puts `dashr` on the PATH with a new build step (`dashr global install --best-effort` → `npm install -g herdr-dashr@<version>`), so the AI session needs no manual `npm install -g`. A failure is reported and never fails the install. Released as 1.0.0. | HERDR-011 |
+| 2026-09-27 | 1.0.0 (DEC-042): a short README, one description everywhere, a tsk-style manifest (checked with Herdr 0.9.1), the skill for every detected coding agent, and an `Unpublish from npm` workflow for the 0.1.x test versions. | SKILL-002 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 10 | 8 | 2 | 0 |
+| HERDR | 11 | 8 | 3 | 0 |
 | GRAF | 10 | 10 | 0 | 0 |
 | DS | 6 | 6 | 0 | 0 |
 | VIEW | 5 | 5 | 0 | 0 |
@@ -467,7 +471,7 @@ Crates:
 | LIB | 4 | 4 | 0 | 0 |
 | GOV/TECH | 8 | 6 | 2 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 103 | 97 | 6 | 0 |
+| **All** | 104 | 97 | 7 | 0 |
 
 ## 15. Acceptance criteria
 

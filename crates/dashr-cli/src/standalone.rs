@@ -526,3 +526,77 @@ pub fn dashboards_delete(paths: &Paths, name: &str) -> Result<()> {
         Err(error) => Err(error.to_string()),
     }
 }
+
+/// The npm command that installs this exact version of dashr globally.
+/// `npm` is `npm.cmd` on Windows, which only `cmd /c` finds.
+pub fn global_install_argv(windows: bool) -> Vec<String> {
+    let npm = [
+        "npm",
+        "install",
+        "-g",
+        "--no-audit",
+        "--no-fund",
+        concat!("herdr-dashr@", env!("CARGO_PKG_VERSION")),
+    ];
+    let prefix: &[&str] = if windows { &["cmd", "/c"] } else { &[] };
+    prefix
+        .iter()
+        .chain(npm.iter())
+        .map(|arg| (*arg).to_owned())
+        .collect()
+}
+
+/// `dashr global install`: puts `dashr` on the human's PATH so their AI
+/// session can run it (DASHR-HERDR-011). With `best_effort`, a failure — no
+/// permission for npm's global folder, a running `dashr.exe` on Windows — is
+/// reported with the command to run by hand, and the plugin install goes on.
+pub fn global_install(best_effort: bool) -> Result<()> {
+    let argv = global_install_argv(cfg!(windows));
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .status();
+    let failure = match status {
+        Ok(status) if status.success() => {
+            println!(
+                "dashr: installed the dashr command globally ({})",
+                env!("CARGO_PKG_VERSION")
+            );
+            return Ok(());
+        }
+        Ok(status) => format!("npm exited with {status}"),
+        Err(error) => format!("could not run npm: {error}"),
+    };
+    let message = format!(
+        "the dashr command was not installed globally ({failure}); run `npm install -g herdr-dashr@{}` yourself",
+        env!("CARGO_PKG_VERSION")
+    );
+    if best_effort {
+        println!("dashr: {message}");
+        Ok(())
+    } else {
+        Err(message)
+    }
+}
+
+#[cfg(test)]
+mod global_tests {
+    use super::global_install_argv;
+
+    #[test]
+    fn installs_this_version_through_cmd_on_windows() {
+        let pinned = format!("herdr-dashr@{}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            global_install_argv(false),
+            [
+                "npm",
+                "install",
+                "-g",
+                "--no-audit",
+                "--no-fund",
+                pinned.as_str()
+            ]
+        );
+        assert_eq!(global_install_argv(true)[..3], ["cmd", "/c", "npm"]);
+    }
+}
