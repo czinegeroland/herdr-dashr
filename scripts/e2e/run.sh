@@ -643,7 +643,8 @@ ok "closing the pane stops the OpenTelemetry container and deletes its files and
 
 log "doctor"
 "$ROOT/bin/dashr" --config-dir "$CONFIG_DIR" --state-dir "$STATE_DIR" doctor >"$WORK/doctor.out" || { cat "$WORK/doctor.out"; fail "doctor failed"; }
-grep -q 'docker' "$WORK/doctor.out" && grep -q 'terminal-browser' "$WORK/doctor.out" || fail "doctor output incomplete"
+grep -q 'docker' "$WORK/doctor.out" && grep -q 'herdr' "$WORK/doctor.out" || fail "doctor output incomplete"
+grep -q 'terminal-browser' "$WORK/doctor.out" && fail "doctor still checks terminal-browser, which dashr no longer uses"
 ok "doctor passes required checks and reports optional ones"
 
 log "custom image with Infinity and Zabbix"
