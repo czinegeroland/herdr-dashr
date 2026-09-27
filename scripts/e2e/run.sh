@@ -493,7 +493,12 @@ ok "closing the pane the AI session opened removes its session"
 
 log "AC-OTEL: one OpenTelemetry container per pane"
 herdr plugin action invoke herdr-dashr.otel >/dev/null
-wait_for 120 "grep -l '\"otlp\": {' $STATE_DIR/sessions/*.json" || fail "no OpenTelemetry session record appeared"
+wait_for 120 "grep -l '\"otlp\": {' $STATE_DIR/sessions/*.json" || {
+  for pane in $(herdr pane list | python3 -c 'import json,sys; print(" ".join(p["pane_id"] for p in json.load(sys.stdin)["result"]["panes"]))'); do
+    echo "--- $pane"; herdr pane read "$pane" --source recent | tail -15
+  done
+  fail "no OpenTelemetry session record appeared"
+}
 ORECORD="$(grep -l '"otlp": {' "$STATE_DIR"/sessions/*.json | head -n 1)"
 OSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$ORECORD")"
 OPANE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pane_id"])' "$ORECORD")"
