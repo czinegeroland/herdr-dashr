@@ -5,6 +5,7 @@ mod doctor;
 mod herdr_cmds;
 mod pane;
 mod standalone;
+mod viewer;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

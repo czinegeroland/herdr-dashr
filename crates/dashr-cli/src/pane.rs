@@ -173,11 +173,17 @@ pub fn agent_argv(template: &[String], mcp_config: &Path, prompt: &str) -> Vec<S
 /// The pane's whole view: the link to open in a browser and one line of
 /// health. Built for a narrow pane (DEC-040); per-panel detail is the
 /// agent's business (`panel_status`), not the human's.
-fn render_status(out: &mut impl Write, record: &SessionRecord, tick: Option<&Tick>, note: &str) {
+fn render_status(
+    out: &mut impl Write,
+    record: &SessionRecord,
+    link: &str,
+    tick: Option<&Tick>,
+    note: &str,
+) {
     let _ = write!(out, "\x1b[2J\x1b[H");
     let _ = writeln!(out, "\x1b[1mdashr\x1b[0m");
     let _ = writeln!(out);
-    let _ = writeln!(out, "{}", record.dashboard_url());
+    let _ = writeln!(out, "{link}");
     let _ = writeln!(out, "\x1b[2mCtrl-click to open\x1b[0m");
     let _ = writeln!(out);
     match tick {
@@ -526,10 +532,32 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
     // opens Grafana in their own browser, which follows dashboard changes by
     // itself (Grafana Live) — no browser inside the pane (DEC-040).
     narrow(&herdr, &pane_id);
-    let note = chat_note;
+    // The link is a page showing only the dashboard (DEC-041); if Grafana
+    // will not share it, fall back to its kiosk view and say so.
+    let shared = dashr_grafana::Client::local(&record.grafana_url())
+        .shared_dashboard(&record.dashboard_uid)
+        .map_err(|error| error.to_string())
+        .and_then(|token| {
+            crate::viewer::serve(
+                record.grafana_url(),
+                record.dashboard_uid.clone(),
+                token,
+                Arc::clone(&stop),
+            )
+            .map_err(|error| error.to_string())
+        });
+    let (link, note) = match shared {
+        Ok(port) => (format!("http://127.0.0.1:{port}/"), chat_note),
+        Err(error) => (
+            format!("{}?kiosk", record.dashboard_url()),
+            format!("Dashboard-only view unavailable: {error}\n{chat_note}")
+                .trim()
+                .to_owned(),
+        ),
+    };
     while !stop.load(Ordering::SeqCst) {
         let tick = latest.lock().ok().and_then(|slot| slot.clone());
-        render_status(&mut std::io::stdout(), &record, tick.as_ref(), &note);
+        render_status(&mut std::io::stdout(), &record, &link, tick.as_ref(), &note);
         wait(&stop, Duration::from_secs(2));
     }
 
@@ -655,12 +683,15 @@ mod tests {
             ..Tick::default()
         };
         let mut out = Vec::new();
-        render_status(&mut out, &record(), Some(&tick), "");
-        let text = String::from_utf8(out).unwrap();
-        assert!(
-            text.contains("\nhttp://127.0.0.1:32768/d/dashr-abcd-w1-p1\n"),
-            "{text}"
+        render_status(
+            &mut out,
+            &record(),
+            "http://127.0.0.1:41234/",
+            Some(&tick),
+            "",
         );
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("\nhttp://127.0.0.1:41234/\n"), "{text}");
         assert!(text.contains("panels 1 ok · 1 err"));
         assert!(text.contains("DLQ not empty"));
         // Narrow: no line of text wider than the link.
@@ -669,10 +700,7 @@ mod tests {
             .map(|line| strip_ansi(line).chars().count())
             .max()
             .unwrap();
-        assert!(
-            widest <= "http://127.0.0.1:32768/d/dashr-abcd-w1-p1".len(),
-            "{text}"
-        );
+        assert!(widest <= "http://127.0.0.1:41234/".len(), "{text}");
     }
 
     fn strip_ansi(line: &str) -> String {

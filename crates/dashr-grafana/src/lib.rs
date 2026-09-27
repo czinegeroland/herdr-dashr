@@ -241,6 +241,45 @@ impl Client {
             })
     }
 
+    /// The access token of `uid`'s shared ("public") dashboard, enabling
+    /// it the first time. `/public-dashboards/<token>` renders that one
+    /// dashboard and nothing of Grafana around it (DEC-041).
+    pub fn shared_dashboard(&self, uid: &str) -> Result<String, GrafanaError> {
+        let path = format!("/api/dashboards/uid/{}/public-dashboards", encode_path(uid));
+        let token = |value: &Value| {
+            value
+                .get("accessToken")
+                .and_then(Value::as_str)
+                .filter(|token| !token.is_empty())
+                .map(str::to_owned)
+        };
+        if let Some(existing) = self.get(&path).ok().as_ref().and_then(token) {
+            return Ok(existing);
+        }
+        let created = self.post(
+            &path,
+            &serde_json::json!({"isEnabled": true, "share": "public", "timeSelectionEnabled": true}),
+        )?;
+        token(&created).ok_or_else(|| GrafanaError::Unexpected {
+            path,
+            message: "no access token in the answer".into(),
+        })
+    }
+
+    /// The saved version of `uid`'s dashboard; it changes with every save.
+    pub fn dashboard_version(&self, uid: &str) -> Result<i64, GrafanaError> {
+        let path = format!("/api/dashboards/uid/{}", encode_path(uid));
+        let value = self.get(&path)?;
+        value
+            .pointer("/dashboard/version")
+            .or_else(|| value.pointer("/meta/version"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| GrafanaError::Unexpected {
+                path,
+                message: "no version in the answer".into(),
+            })
+    }
+
     /// The uid of the folder titled `title`, creating it when missing.
     pub fn ensure_folder(&self, title: &str) -> Result<String, GrafanaError> {
         let folders = self.get("/api/folders?limit=1000")?;
