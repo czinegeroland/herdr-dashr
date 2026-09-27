@@ -8,17 +8,17 @@
 
 id = "herdr-dashr"
 name = "Herdr Dashr"
-version = "0.1.4"
+version = "0.1.5"
 min_herdr_version = "0.9.0"
 description = "Live Grafana dashboards in a Herdr pane."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["cmd", "/c", "npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.4"]
+command = ["cmd", "/c", "npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.5"]
 platforms = ["windows"]
 
 [[build]]
-command = ["npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.4"]
+command = ["npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.5"]
 platforms = ["linux", "macos"]
 
 [[build]]

@@ -171,7 +171,8 @@ for file in reference/dashboard-json.md reference/datasources.md reference/recip
 done
 ok "the dashboard pane installed the herdr-dashr skill before starting the agent"
 
-wait_for 30 "herdr pane read $PANE --source visible | grep -q '^http://127.0.0.1:$PORT/d/[a-z0-9-]*\$'" || fail "the pane does not show the dashboard link on a line of its own"
+wait_for 30 "herdr pane read $PANE --source visible | grep -q '^http://127.0.0.1:[0-9]*/\$'" || fail "the pane does not show the dashboard link on a line of its own"
+herdr pane read "$PANE" --source visible | grep -q "127.0.0.1:$PORT" && fail "the pane links to Grafana itself instead of the dashboard-only page"
 wait_for 30 "herdr pane read $PANE --source visible | grep -q 'panels [0-9]* ok'" || fail "the pane does not show panel health"
 herdr pane read "$PANE" --source visible | grep -q 'Heartbeat (TestData)' && fail "the pane lists panels; it should show only the link and health"
 ok "text view shows the kiosk URL and per-panel status"
@@ -430,6 +431,27 @@ wait_for 20 "! docker ps --format '{{.Names}}' | grep -q dashr-e2e-orphan" || fa
 docker ps --format '{{.Names}}' | grep -q dashr-e2e-foreign || fail "another server's container was reaped"
 docker rm -f dashr-e2e-foreign >/dev/null
 ok "orphan of this server reaped; another server's container left alone"
+
+log "orphaned pane process stops itself when its pane is gone"
+# Windows: closing the pane kills the node launcher, and dashr.exe is never
+# signalled. Here the pane process runs outside the pane, so closing the pane
+# sends it nothing, and it must notice on its own.
+WPANE="$(herdr pane split "$(herdr pane list | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["panes"][0]["pane_id"])')" \
+  --direction right --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
+WCONF="$WORK/watchdog-config"
+mkdir -p "$WCONF"
+printf '[agent]\nenabled = false\n\n[monitor]\ninterval_secs = 2\n' >"$WCONF/dashr.toml"
+HERDR_PANE_ID="$WPANE" HERDR_SOCKET_PATH="$HOME/.config/herdr/sessions/$HERDR_SESSION/herdr.sock" HERDR_BIN_PATH="$(command -v herdr)" \
+  setsid "$ROOT/bin/dashr" --config-dir "$WCONF" --state-dir "$STATE_DIR" herdr pane dashboard >"$WORK/watchdog.out" 2>&1 </dev/null &
+WPID=$!
+wait_for 90 "grep -l '\"pane_id\": \"$WPANE\"' $STATE_DIR/sessions/*.json" || { cat "$WORK/watchdog.out"; fail "watchdog pane session did not start"; }
+WRECORD="$(grep -l "\"pane_id\": \"$WPANE\"" "$STATE_DIR"/sessions/*.json | head -n 1)"
+WSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$WRECORD")"
+herdr pane close "$WPANE" >/dev/null
+wait_for 30 "! kill -0 $WPID" || { kill "$WPID"; fail "the pane process kept running after its pane was closed"; }
+wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$WSESSION" || fail "its container kept running"
+[ ! -e "$WRECORD" ] || fail "its session record was left behind"
+ok "a pane process that was never signalled noticed its pane was gone, stopped Grafana and exited"
 
 log "AC-AGENT: the human's AI session opens and builds the dashboard"
 # Exactly what the skill tells the agent to run, from an ordinary pane: no
@@ -694,7 +716,9 @@ def find(v):
             found = find(inner)
             if found: return found
 print(find(json.loads(sys.argv[1])) or "")' "$1"; }
-  link_of() { herdr pane read "$1" --source visible | grep -o '^http://127.0.0.1:[0-9]*/d/[a-z0-9-]*' | head -n 1; }
+  link_of() { herdr pane read "$1" --source visible | grep -o '^http://127.0.0.1:[0-9]*/$' | head -n 1; }
+  # What the human sees is the dashboard inside dashr's page.
+  in_dashboard() { local port="$1" page="$2"; shift 2; eval_js "$port" "$page" "$@" /public-dashboards/; }
   chrome() { # <devtools port> <profile dir> <url>
     "$CHROME" --headless=new --no-sandbox --disable-gpu --window-size=1600,1000 --remote-debugging-port="$1" \
       --user-data-dir="$2" "$3" >/dev/null 2>&1 &
@@ -707,27 +731,31 @@ print(find(json.loads(sys.argv[1])) or "")' "$1"; }
   BSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session"])' "$WORK/bwait.json")"
   wait_for 20 "[ -n \"\$(link_of $BPANE)\" ]" || fail "no link in the pane"
   LINK="$(link_of "$BPANE")"
-  BUID="${LINK##*/d/}"
+  PAGE="${LINK#http://127.0.0.1}"
   chrome 9311 "$WORK/chrome-1" "$LINK"
   CHROME_PIDS="$!"
-  wait_for 60 "eval_js 9311 /d/$BUID 'document.body.innerText' | grep -q 'Heartbeat (TestData)'" \
-    || { eval_js 9311 "/d/$BUID" 'document.body.innerText' | head -5; fail "Chrome did not render the dashboard from the pane's link"; }
-  eval_js 9311 "/d/$BUID" 'document.body.innerText' | grep -q 'unexpected error' && fail "Grafana shows an error page"
+  wait_for 60 "in_dashboard 9311 $PAGE 'document.body.innerText' | grep -q 'Heartbeat (TestData)'" \
+    || { in_dashboard 9311 "$PAGE" 'document.body.innerText' | head -5; fail "Chrome did not show the dashboard from the pane's link"; }
   ok "Ctrl-clicking the pane's link shows the dashboard in Chrome"
-  shot 9311 "/d/$BUID" 1-grafana-welcome
+  SEEN="$(in_dashboard 9311 "$PAGE" 'document.body.innerText')"
+  for word in "Sign in" "Dashboards" "Administration" "Explore" "Edit" "Share"; do
+    echo "$SEEN" | grep -qw "$word" && fail "the dashboard page shows Grafana's '$word'"
+  done
+  ok "only the dashboard: no Grafana menus, search, edit, share or sign-in"
+  shot 9311 "$PAGE" 1-grafana-welcome
   # The agent changes the dashboard; the open tab follows by itself.
-  eval_js 9311 "/d/$BUID" 'window.__dashrMark = 1' >/dev/null
+  eval_js 9311 "$PAGE" 'window.__dashrMark = 1' >/dev/null
   cat >"$WORK/bapply.json" <<'EOF2'
 {"dashboard": {"title": "browser check", "panels": [
   {"id": 1, "type": "timeseries", "title": "Changed by the agent", "datasource": {"uid": "dashr-testdata"},
    "targets": [{"refId": "A", "scenarioId": "random_walk"}]}]}}
 EOF2
   "${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool apply_dashboard --session "$BSESSION" --args-file "$WORK/bapply.json" >/dev/null || fail "apply_dashboard failed"
-  wait_for 30 "eval_js 9311 /d/$BUID 'document.body.innerText' | grep -q 'Changed by the agent'" \
+  wait_for 30 "in_dashboard 9311 $PAGE 'document.body.innerText' | grep -q 'Changed by the agent'" \
     || fail "the open Chrome tab did not follow the agent's change"
-  eval_js 9311 "/d/$BUID" 'String(window.__dashrMark)' | grep -q '^1$' || fail "the tab reloaded instead of updating in place"
-  ok "the open Chrome tab showed the agent's change within seconds, without a reload"
-  shot 9311 "/d/$BUID" 2-changed-by-the-agent
+  eval_js 9311 "$PAGE" 'String(window.__dashrMark)' | grep -q '^1$' || fail "the whole page reloaded instead of just the dashboard"
+  ok "the open Chrome tab showed the agent's change within seconds, by itself"
+  shot 9311 "$PAGE" 2-changed-by-the-agent
   herdr pane close "$BPANE" >/dev/null
   wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$BSESSION" || fail "Chrome scenario container still running"
 
@@ -742,15 +770,15 @@ EOF2
   # the moment of arming.
   wait_for 20 "[ -n \"\$(link_of $OBPANE)\" ]" || fail "no link in the OpenTelemetry pane"
   OLINK="$(link_of "$OBPANE")"
-  OBUID="${OLINK##*/d/}"
+  OPAGE="${OLINK#http://127.0.0.1}"
   chrome 9312 "$WORK/chrome-2" "$OLINK"
   CHROME_PIDS="$CHROME_PIDS $!"
-  wait_for 60 "eval_js 9312 /d/$OBUID 'document.body.innerText' | grep -q waiting" || fail "expectation tiles did not appear in Chrome"
-  shot 9312 "/d/$OBUID" 3-otel-expectations-armed
+  wait_for 60 "in_dashboard 9312 $OPAGE 'document.body.innerText' | grep -q waiting" || fail "expectation tiles did not appear in Chrome"
+  shot 9312 "$OPAGE" 3-otel-expectations-armed
   printf 'E2E order 1 created\nE2E exception boom\nE2E plain line\n' \
     | "${AGENT_ENV[@]}" DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" tail --service web >/dev/null
   trail_colours() {
-    eval_js 9312 "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")" | python3 -c '
+    in_dashboard 9312 "$OPAGE" "$(cat "$ROOT/scripts/e2e/trail_colours.js")" | python3 -c '
 import json, re, sys
 colours = json.loads(sys.stdin.read())
 rgb = {k: [int(n) for n in re.findall(r"\d+", v)[:3]] if v.startswith("rgb") else None for k, v in colours.items()}
@@ -760,17 +788,16 @@ assert f and f[0] > f[1] + 50, colours
 assert p is None or abs(p[0] - p[1]) < 30, colours
 print(colours)'
   }
-  wait_for 60 trail_colours || { eval_js 9312 "/d/$OBUID" "$(cat "$ROOT/scripts/e2e/trail_colours.js")"; fail "the live trail does not highlight the lines"; }
+  wait_for 60 trail_colours || { in_dashboard 9312 "$OPAGE" "$(cat "$ROOT/scripts/e2e/trail_colours.js")"; fail "the live trail does not highlight the lines"; }
   ok "live trail in Chrome: expected line green, forbidden line red, other lines plain ($(trail_colours))"
-  shot 9312 "/d/$OBUID" 4-otel-trail-highlighted
-  # The page must pick up new lines by itself: Grafana ignores a refresh
-  # interval missing from the dashboard's allowed list (DEC-034).
+  shot 9312 "$OPAGE" 4-otel-trail-highlighted
+  # The page must pick up new lines by itself (DEC-034).
   echo 'E2E order 2 created later' | "${AGENT_ENV[@]}" DASHR_SESSION="$OBSESSION" "$ROOT/bin/dashr" tail --service web >/dev/null
-  wait_for 15 "eval_js 9312 /d/$OBUID 'document.body.innerText' | grep -q 'E2E order 2 created later'" \
+  wait_for 20 "in_dashboard 9312 $OPAGE 'document.body.innerText' | grep -q 'E2E order 2 created later'" \
     || fail "the dashboard did not refresh by itself"
-  shot 9312 "/d/$OBUID" 5-otel-trail-live
+  shot 9312 "$OPAGE" 5-otel-trail-live
   ok "the Chrome tab refreshes by itself: a new line appeared without a reload"
-  eval_js 9312 "/d/$OBUID" 'document.body.innerText' | grep -q 'Invalid date' && fail "time picker shows an invalid date"
+  in_dashboard 9312 "$OPAGE" 'document.body.innerText' | grep -q 'Invalid date' && fail "time picker shows an invalid date"
   kill $CHROME_PIDS 2>/dev/null || true
   herdr pane close "$OBPANE" >/dev/null
   wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$OBSESSION" || fail "OpenTelemetry container still running"

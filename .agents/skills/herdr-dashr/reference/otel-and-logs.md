@@ -60,10 +60,8 @@ The dashboard gains, at the top:
   forbidden ones on red.
 
 The tiles count from the dashboard's time range, which arming sets to the
-moment of arming. A browser tab that was already open keeps its own range,
-so after arming ask the human to Ctrl-click the link in the dashr pane again
-(a fresh tab counts from arming). Your `log_expectations` verdict is exact
-either way.
+moment of arming; the human's page reloads the dashboard after every change,
+so it counts from arming too.
 
 The pane notifies the human as each expected message arrives, and marks
 itself blocked when a forbidden one does. Afterwards `log_expectations`
