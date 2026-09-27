@@ -215,6 +215,10 @@ fn render_status(out: &mut impl Write, record: &SessionRecord, tick: Option<&Tic
     let _ = out.flush();
 }
 
+/// Consecutive monitor ticks without the pane before the pane process stops
+/// itself and cleans up (DASHR-GRAF-010).
+pub const PANE_GONE_AFTER: u32 = 2;
+
 /// The share of its split's width the pane beside it keeps, so the dashboard
 /// pane is a narrow column on the right (DEC-040).
 pub const LEFT_SHARE: f64 = 0.8;
@@ -493,11 +497,25 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         };
         std::thread::spawn(move || {
             let client = dashr_grafana::Client::local(&record.grafana_url());
+            let mut missing = 0;
             while !stop.load(Ordering::SeqCst) {
                 let tick = monitor::tick(&record, &client, &masker, &store);
                 monitor::report(&tick, &mut reporter, notify);
                 if let Ok(mut slot) = latest.lock() {
                     *slot = Some(tick);
+                }
+                // The pane is gone but this process was not told: on Windows
+                // Herdr kills the `node` launcher and its child `dashr.exe`
+                // lives on, holding the plugin's files and the container.
+                // Two misses in a row, so one failed call does not stop it.
+                missing = if reporter.herdr.pane_exists(&reporter.pane) {
+                    0
+                } else {
+                    missing + 1
+                };
+                if missing >= PANE_GONE_AFTER {
+                    stop.store(true, Ordering::SeqCst);
+                    break;
                 }
                 wait(&stop, interval);
             }

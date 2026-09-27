@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T04:00:00Z |
+| Last updated | 2026-09-27T12:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -178,6 +178,7 @@ Crates:
 | DASHR-GRAF-007 | The image is pinned (`grafana/grafana:12.1.1`); `dashr image build` produces a custom image with Infinity and Zabbix plugins installed outside the tmpfs path. | Must | Verified | Custom-image scenario in `scripts/e2e/run.sh` (Infinity loaded from outside the tmpfs) |
 | DASHR-GRAF-008 | A session record (ids, port, uid, datasource policies) is written to the plugin state directory, holds no secret or data value, and is removed on stop. | Must | Verified | `session::tests::records_hold_no_secret_shaped_fields`, `round_trips_lists_and_removes`. |
 | DASHR-GRAF-009 | dashr keeps its state (sessions, watches, saved dashboards) in its own directory, not Herdr's plugin state directory: `DASHR_STATE_DIR`, else `%APPDATA%\\herdr-dashr\\state` on Windows, `$XDG_STATE_HOME/herdr-dashr`, `~/Library/Application Support/herdr-dashr` on macOS, or `~/.local/state/herdr-dashr`. The pane and every `dashr` command, including the AI session's, see the same sessions. | Must | Verified | `dashr_runtime::paths`; AC-AGENT in `scripts/e2e/run.sh` runs `dashr` without Herdr's plugin variables |
+| DASHR-GRAF-010 | A pane process whose pane is gone stops Grafana, deletes its files and exits within two monitor ticks, even though nothing signalled it. On Windows, closing a pane kills the `node` launcher and leaves `dashr.exe` running, which held the plugin's files (uninstall failed with OS error 32) and kept the container up. | Must | Verified | Watchdog scenario in `scripts/e2e/run.sh` (pane process run outside its pane, never signalled) |
 
 ### 8.3 Datasources (DS)
 
@@ -441,13 +442,14 @@ Crates:
 | 2026-09-27 | The human only talks to their AI session (DEC-039, mirroring herdr-remote-channel). The skill is installed with `npx skills add`. It opens the dashboard pane beside the session (for example for a pasted CodePipeline link), `dashr wait` hands over the session and briefing, and `dashr tool` builds with the masked tools. Panes opened this way have no chat pane. State moved to dashr's own directory, with Windows-aware defaults. New AC-AGENT end-to-end scenario. Version 0.1.2. | HERDR-010, GRAF-009, MCP-011, SKILL-002, SKILL-006 |
 | 2026-09-27 | Plain one-line descriptions: the npm package and the plugin manifest say "Live Grafana dashboards in a Herdr pane.", and the platform packages say "The dashr executable for <os> <cpu>.", as herdr-remote-channel's do. Version 0.1.3, because npm cannot change a published version's description. | none (wording) |
 | 2026-09-27 | The pane shows a link, not a browser (DEC-040). It is a narrow column that sizes itself, with the link, panel health, alerts and the OTLP endpoint. terminal-browser is dropped from the pane, the doctor and CI. The e2e browser scenarios now open the pane's link in a real Chrome and check that the tab follows the agent's changes without reloading. Version 0.1.4. | VIEW-001, VIEW-002, VIEW-003, VIEW-004, SEC-005 |
+| 2026-09-27 | Pane watchdog: the pane process checks every monitor tick that its pane still exists. After two misses it stops Grafana, deletes its files and exits. On Windows an orphaned `dashr.exe` had kept the container running and made `herdr plugin uninstall` fail with OS error 32. Version 0.1.5. | GRAF-010 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
 | HERDR | 10 | 8 | 2 | 0 |
-| GRAF | 9 | 9 | 0 | 0 |
+| GRAF | 10 | 10 | 0 | 0 |
 | DS | 6 | 6 | 0 | 0 |
 | VIEW | 4 | 4 | 0 | 0 |
 | CHAT | 3 | 3 | 0 | 0 |
@@ -462,7 +464,7 @@ Crates:
 | LIB | 4 | 4 | 0 | 0 |
 | GOV/TECH | 8 | 6 | 2 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 101 | 95 | 6 | 0 |
+| **All** | 102 | 96 | 6 | 0 |
 
 ## 15. Acceptance criteria
 

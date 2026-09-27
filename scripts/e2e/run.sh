@@ -431,6 +431,27 @@ docker ps --format '{{.Names}}' | grep -q dashr-e2e-foreign || fail "another ser
 docker rm -f dashr-e2e-foreign >/dev/null
 ok "orphan of this server reaped; another server's container left alone"
 
+log "orphaned pane process stops itself when its pane is gone"
+# Windows: closing the pane kills the node launcher, and dashr.exe is never
+# signalled. Here the pane process runs outside the pane, so closing the pane
+# sends it nothing, and it must notice on its own.
+WPANE="$(herdr pane split "$(herdr pane list | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["panes"][0]["pane_id"])')" \
+  --direction right --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
+WCONF="$WORK/watchdog-config"
+mkdir -p "$WCONF"
+printf '[agent]\nenabled = false\n\n[monitor]\ninterval_secs = 2\n' >"$WCONF/dashr.toml"
+HERDR_PANE_ID="$WPANE" HERDR_SOCKET_PATH="$HOME/.config/herdr/sessions/$HERDR_SESSION/herdr.sock" HERDR_BIN_PATH="$(command -v herdr)" \
+  setsid "$ROOT/bin/dashr" --config-dir "$WCONF" --state-dir "$STATE_DIR" herdr pane dashboard >"$WORK/watchdog.out" 2>&1 </dev/null &
+WPID=$!
+wait_for 90 "grep -l '\"pane_id\": \"$WPANE\"' $STATE_DIR/sessions/*.json" || { cat "$WORK/watchdog.out"; fail "watchdog pane session did not start"; }
+WRECORD="$(grep -l "\"pane_id\": \"$WPANE\"" "$STATE_DIR"/sessions/*.json | head -n 1)"
+WSESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$WRECORD")"
+herdr pane close "$WPANE" >/dev/null
+wait_for 30 "! kill -0 $WPID" || { kill "$WPID"; fail "the pane process kept running after its pane was closed"; }
+wait_for 30 "! docker ps --format '{{.Names}}' | grep -q herdr-grafana-$WSESSION" || fail "its container kept running"
+[ ! -e "$WRECORD" ] || fail "its session record was left behind"
+ok "a pane process that was never signalled noticed its pane was gone, stopped Grafana and exited"
+
 log "AC-AGENT: the human's AI session opens and builds the dashboard"
 # Exactly what the skill tells the agent to run, from an ordinary pane: no
 # action, no chat pane, no --state-dir or --config-dir.
