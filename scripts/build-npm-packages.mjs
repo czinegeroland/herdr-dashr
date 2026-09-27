@@ -135,7 +135,7 @@ function main() {
       {
         name: ROOT_PACKAGE,
         version,
-        description: 'Live Grafana dashboards in a Herdr pane.',
+        description: 'Live Grafana dashboards your AI agent builds, right beside your chat in Herdr.',
         license: 'Apache-2.0',
         repository: { type: 'git', url: `git+${REPOSITORY}.git` },
         homepage: REPOSITORY,
