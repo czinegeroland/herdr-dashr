@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T03:00:00Z |
+| Last updated | 2026-09-27T04:00:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -194,10 +194,10 @@ Crates:
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-VIEW-001 | The dashboard pane shows the Grafana kiosk URL (`?kiosk&refresh=<n>`) in terminal-browser, and the page refreshes by itself at that interval (DEC-034). | Must | Verified | Browser-pane scenario in `scripts/e2e/run.sh`: the real pane process in `scripts/e2e/kitty_term.py` opens the kiosk URL and Grafana renders; a line shipped after the page loaded appears without a reload; `the_pinned_refresh_is_always_an_allowed_interval` |
-| DASHR-VIEW-002 | The browser profile lives in the session runtime directory via `TERMINAL_BROWSER_APPDATA` and is deleted with it. | Must | Verified | Browser-pane scenario in `scripts/e2e/run.sh` asserts the profile under the memory-backed runtime dir and its deletion on close; `open_command_points_the_profile_at_the_runtime_dir` |
-| DASHR-VIEW-003 | Without terminal-browser (or with `browser.enabled = false`) the pane shows a text status view: the URL and per-panel state. | Must | Verified | Text-view assertions in `scripts/e2e/run.sh` |
-| DASHR-VIEW-004 | Applying a dashboard reloads the browser showing this session. | Should | Verified | Browser-pane scenario: `apply_dashboard` reports `browser_reloaded` and the page shows the new panel; `cdp_call_skips_events_and_returns_the_result` |
+| DASHR-VIEW-001 | The dashboard pane is a narrow column on the right. Opened beside another pane, it narrows itself to a fifth of the split. It shows the dashboard link (`http://127.0.0.1:<port>/d/<uid>`) on one line, one line of panel health, breached alerts, and in OpenTelemetry mode the OTLP endpoint. There is no per-panel list and no browser inside the pane (DEC-040). | Must | Verified | `status_shows_the_link_and_one_health_line_only`, `a_right_hand_pane_is_narrowed_to_a_fifth`; AC-OPEN pane assertions and AC-AGENT width check in `scripts/e2e/run.sh` |
+| DASHR-VIEW-002 | The human opens the link in their own browser. An open tab follows every dashboard the agent applies within seconds without reloading (Grafana Live), and refreshes its data at the dashboard's interval (DEC-034). | Must | Verified | Chrome scenario in `scripts/e2e/run.sh`: a real Chrome opens the pane's link, shows the agent's change without a reload, and a new log line appears by itself |
+| DASHR-VIEW-003 | No browser is bundled or required. terminal-browser, which has no Windows build and no public license, is no longer used by the pane or checked by the doctor. | Must | Verified | `crates/dashr-cli/src/pane.rs` and `doctor.rs`; CI installs no terminal-browser and the Chrome scenario passes |
+| DASHR-VIEW-004 | Log-check tiles in a tab opened after arming count from the moment of arming. An already-open tab keeps its own time range, so the skill has the agent ask the human to reopen the link after arming. | Should | Verified | Chrome scenario in `scripts/e2e/run.sh` (tab opened after arming shows `waiting`, then the highlighted trail); `reference/otel-and-logs.md` |
 
 ### 8.5 Chat pane (CHAT)
 
@@ -326,7 +326,7 @@ Crates:
 | DASHR-SEC-002 | Grafana listens on loopback only. | Verified | `run_args_store_nothing_and_bind_loopback`. |
 | DASHR-SEC-003 | No secret is written to a file or passed in argv. | Verified | `secrets_are_passed_by_name_only`, `secrets_are_env_references_never_values`. |
 | DASHR-SEC-004 | The container cannot escalate: read-only root, no swap, no capabilities, no-new-privileges. Plain Grafana persists nothing (tmpfs); in OpenTelemetry mode telemetry is written to anonymous volumes that are deleted with the container (DEC-033). | Verified | AC-OPEN and AC-OTEL `docker inspect` assertions; AC-OTEL checks the volumes are gone after the pane closes |
-| DASHR-SEC-005 | The browser profile is ephemeral. | Verified | Browser-pane scenario in `scripts/e2e/run.sh` |
+| DASHR-SEC-005 | dashr runs no browser, so it creates no browser profile to leak or clean up (DEC-040). | Verified | `crates/dashr-cli/src/pane.rs`; Chrome scenario uses the human's own browser |
 | DASHR-SEC-006 | Screenshots of dashboards touching personal datasources are refused. | Verified | `screenshots_only_for_non_personal_dashboards`. |
 | DASHR-SEC-007 | Herdr pane state (messages, tokens) carries counts and rule wording only, because Herdr's socket has no caller authentication (#514). | Verified | `a_new_breach_blocks_and_notifies_once`, `grafana_errors_show_in_the_token` (counts and wording only) |
 | DASHR-SEC-008 | The reaper only stops containers labelled with this Herdr server's socket hash. | Verified | `orphans_are_this_servers_containers_without_a_live_pane`, `session_ids_differ_between_servers_for_the_same_pane`. |
@@ -397,6 +397,7 @@ Crates:
 | DEC-037 | One public release. The earlier v0.1.0 and v0.2.0 GitHub releases (never published to npm) are deleted with their tags, and the version returns to 0.1.0: the first release anyone installs is v0.1.0 with every feature to date. `Delete release` (`.github/workflows/delete-release.yml`, manual, the tag typed twice) removes a release and its tag for sessions that cannot delete tags. Ledger rows naming v0.2.0 and v0.3.0 describe work that is now part of v0.1.0. |
 | DEC-038 | The plugin installs the way herdr-remote-channel does: `platforms` includes Windows, the build step is `npm install --no-save herdr-dashr@<version>` (via `cmd /c` on Windows, where `npm` is `npm.cmd`), and entry points run `node node_modules/herdr-dashr/bin.js`, since `node` resolves under any spawning model. `sh scripts/install.sh` had been skipped by Herdr on the first Windows install, leaving a plugin with no binary. This supersedes DEC-028's choice of running `bin/dashr` without Node. On Windows the chat pane command is quoted for PowerShell, and there is no SIGHUP: the `pane.closed` hook and the startup reaper stop the container. `scripts/install.sh` remains a Unix standalone installer. |
 | DEC-039 | The human talks only to their own AI session, as with herdr-remote-channel. The plugin installs the skill with `npx skills add` from this repository. The skill has that session open the dashboard pane itself (`herdr plugin pane open`, split beside it), wait for it (`dashr wait`) and build with `dashr tool`, a command that runs the MCP tools' own implementation, so masking and privacy rules are one code path. A pane opened that way has no chat pane; the Herdr actions keep theirs. State moved out of Herdr's plugin state directory into dashr's own (herdr-remote-channel keeps its own home), because the AI session's `dashr` has no Herdr plugin variables. The pane records its configuration directory so `dashr tool` masks with the same rules. Sessions and saved dashboards in the old plugin state directory are not migrated. |
+| DEC-040 | The dashboard pane shows a link instead of a browser. The human opens Grafana in their own browser (Chrome), which is a better experience than a terminal renderer. An open tab follows every dashboard change by itself through Grafana Live, verified with a real Chrome, so the pane needs no reload hook. terminal-browser has no Windows build and no public license, so it could not be bundled or pinned. The pane narrows itself to a fifth of its split and shows only the link, panel health, alerts and the OTLP endpoint. This supersedes the terminal-browser parts of DEC-034 and the browser-profile handling. The `screenshot` tool still uses terminal-browser if it happens to be installed. |
 
 ## 13. Open questions and risks
 
@@ -439,6 +440,7 @@ Crates:
 | 2026-09-27 | The Windows npm package is published as `@czinegeroland/herdr-dashr-win32-x64`: npm's spam filter refused `herdr-dashr-win32-x64` on every attempt. The launcher maps each platform to its full package name. The v0.1.1 release is unchanged, and its publish is re-run with the new packaging. | TECH-005 |
 | 2026-09-27 | The human only talks to their AI session (DEC-039, mirroring herdr-remote-channel). The skill is installed with `npx skills add`. It opens the dashboard pane beside the session (for example for a pasted CodePipeline link), `dashr wait` hands over the session and briefing, and `dashr tool` builds with the masked tools. Panes opened this way have no chat pane. State moved to dashr's own directory, with Windows-aware defaults. New AC-AGENT end-to-end scenario. Version 0.1.2. | HERDR-010, GRAF-009, MCP-011, SKILL-002, SKILL-006 |
 | 2026-09-27 | Plain one-line descriptions: the npm package and the plugin manifest say "Live Grafana dashboards in a Herdr pane.", and the platform packages say "The dashr executable for <os> <cpu>.", as herdr-remote-channel's do. Version 0.1.3, because npm cannot change a published version's description. | none (wording) |
+| 2026-09-27 | The pane shows a link, not a browser (DEC-040). It is a narrow column that sizes itself, with the link, panel health, alerts and the OTLP endpoint. terminal-browser is dropped from the pane, the doctor and CI. The e2e browser scenarios now open the pane's link in a real Chrome and check that the tab follows the agent's changes without reloading. Version 0.1.4. | VIEW-001, VIEW-002, VIEW-003, VIEW-004, SEC-005 |
 
 ### Requirement completion summary
 
@@ -481,6 +483,7 @@ Crates:
   line turns its tile red, fails the verdict and blocks the pane; the verdict
   never carries a line; clearing restores the dashboard and unblocks the pane.
 - **AC-AGENT** From an ordinary pane, the skill's commands open a dashboard pane beside it with no chat pane. `dashr wait` returns the session and a briefing (a pipeline's, when a link was given) without Grafana's address. `dashr tool` answers by pane id and never returns planted personal values. Closing the pane removes the session.
+- **AC-CHROME** The link in the pane opens the dashboard in a real Chrome. When the agent applies a change, the open tab shows it within seconds without reloading. A tab opened after arming log checks highlights expected and forbidden lines and picks up new lines by itself.
 - **AC-LIB** A dashboard saved by name in one pane loads into a later pane;
   an existing name is not replaced without asking; a dashboard needing a
   datasource the session lacks is refused, naming it, and nothing changes.

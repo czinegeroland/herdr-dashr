@@ -78,12 +78,6 @@ pub fn checks(paths: &Paths) -> Vec<Check> {
         true,
         "https://herdr.dev/docs/install/",
     ));
-    checks.push(tool(
-        "terminal-browser",
-        &config.browser.command,
-        false,
-        "optional: https://github.com/zenbu-labs/terminal-browser (text view without it)",
-    ));
     if let Some(agent) = config.agent.command.first() {
         checks.push(tool(
             "agent",

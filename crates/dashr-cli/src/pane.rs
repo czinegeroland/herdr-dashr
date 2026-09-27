@@ -1,7 +1,7 @@
 //! The dashboard pane: owns Grafana for as long as it lives.
 //!
-//! Start Grafana, split the chat pane off below, show the dashboard (browser
-//! or text view), run the monitor loop, and on exit — including the SIGHUP
+//! Start Grafana, split the chat pane off below when an action asked for
+//! one, show the dashboard link, run the monitor loop, and on exit — including the SIGHUP
 //! Herdr sends when the pane closes — stop everything and delete every file
 //! (requirements DASHR-HERDR-002, DASHR-GRAF-006, DASHR-VIEW-001/003).
 
@@ -18,10 +18,8 @@ use dashr_docker::Docker;
 use dashr_herdr::cli::AgentState;
 use dashr_herdr::{Herdr, PluginEnv};
 use dashr_runtime::Paths;
-use dashr_runtime::browser::Browser;
 use dashr_runtime::monitor::{self, Reporter, Tick};
 use dashr_runtime::session::{self, Identity, Started};
-use dashr_runtime::status::PanelState;
 use serde_json::json;
 
 use crate::Result;
@@ -113,7 +111,7 @@ pub fn briefing(started: &Started, saved: &[String], reader: Reader) -> String {
 Use the dashr MCP tools and follow their privacy rules."
         }
         Reader::Opener => {
-            "The dashboard pane is open beside you and shows a live Grafana dashboard that only the human sees. \
+            "The dashboard pane is open beside you: a narrow column with the link to a live Grafana dashboard that the human opens in their browser and only they see. \
 Drive it with `dashr tool <name> --session <session> --args '<json>'` (tool names as in the herdr-dashr skill) and follow the skill's privacy rules."
         }
     });
@@ -172,70 +170,101 @@ pub fn agent_argv(template: &[String], mcp_config: &Path, prompt: &str) -> Vec<S
         .collect()
 }
 
-fn render_text_view(out: &mut impl Write, record: &SessionRecord, tick: Option<&Tick>, note: &str) {
+/// The pane's whole view: the link to open in a browser and one line of
+/// health. Built for a narrow pane (DEC-040); per-panel detail is the
+/// agent's business (`panel_status`), not the human's.
+fn render_status(out: &mut impl Write, record: &SessionRecord, tick: Option<&Tick>, note: &str) {
     let _ = write!(out, "\x1b[2J\x1b[H");
-    let _ = writeln!(out, "\x1b[1mdashr\x1b[0m  {}", record.session_id);
+    let _ = writeln!(out, "\x1b[1mdashr\x1b[0m");
     let _ = writeln!(out);
-    let _ = writeln!(out, "Dashboard: {}", record.kiosk_url());
-    let _ = writeln!(out, "           (Ctrl-click to open it in your browser)");
-    if let Some(pipeline) = &record.pipeline {
-        let _ = writeln!(out, "Pipeline:  {pipeline}");
-    }
-    if let Some(otlp) = &record.otlp {
-        let _ = writeln!(
-            out,
-            "OTLP:      {} (HTTP) · {} (gRPC)",
-            otlp.http_endpoint(),
-            otlp.grpc_endpoint()
-        );
-        let _ = writeln!(
-            out,
-            "           dashr tail -- <command>   ships its output here"
-        );
-    }
-    let _ = writeln!(out, "{note}");
+    let _ = writeln!(out, "{}", record.dashboard_url());
+    let _ = writeln!(out, "\x1b[2mCtrl-click to open\x1b[0m");
     let _ = writeln!(out);
     match tick {
         None => {
-            let _ = writeln!(out, "checking panels…");
+            let _ = writeln!(out, "starting…");
         }
         Some(tick) if tick.error.is_some() => {
-            let _ = writeln!(out, "Grafana: {}", tick.error.as_deref().unwrap_or(""));
+            let _ = writeln!(out, "\x1b[31m●\x1b[0m Grafana not answering");
         }
         Some(tick) => {
-            let _ = writeln!(out, "Panels: {}", tick.summary.token());
-            for panel in &tick.panels {
-                let mark = match panel.state {
-                    PanelState::Ok => "\x1b[32m●\x1b[0m",
-                    PanelState::Empty => "\x1b[33m○\x1b[0m",
-                    PanelState::Error => "\x1b[31m✗\x1b[0m",
-                    PanelState::NoQueries => " ",
-                };
-                let error = panel
-                    .targets
-                    .iter()
-                    .find_map(|target| target.error.as_deref())
-                    .map(|error| format!("  {}", error.chars().take(60).collect::<String>()))
-                    .unwrap_or_default();
-                let _ = writeln!(
-                    out,
-                    " {mark} #{:<3} {:<40} {:>6} rows{error}",
-                    panel.panel_id,
-                    panel.title.chars().take(40).collect::<String>(),
-                    panel.rows
-                );
-            }
+            let summary = &tick.summary;
+            let colour = if !tick.breached.is_empty() || summary.error > 0 {
+                "31"
+            } else if summary.empty > 0 {
+                "33"
+            } else {
+                "32"
+            };
+            let _ = writeln!(out, "\x1b[{colour}m●\x1b[0m panels {}", summary.token());
             for alert in &tick.breached {
-                let _ = writeln!(out, " \x1b[31m⚠ {alert}\x1b[0m");
+                let _ = writeln!(out, "\x1b[31m⚠ {alert}\x1b[0m");
             }
         }
     }
+    if let Some(otlp) = &record.otlp {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "OTLP {}", otlp.http_endpoint());
+    }
+    if !note.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "{note}");
+    }
     let _ = writeln!(out);
-    let _ = writeln!(
-        out,
-        "Close this pane to stop Grafana and delete everything."
-    );
+    let _ = writeln!(out, "\x1b[2mClose to stop Grafana.\x1b[0m");
     let _ = out.flush();
+}
+
+/// The share of its split's width the pane beside it keeps, so the dashboard
+/// pane is a narrow column on the right (DEC-040).
+pub const LEFT_SHARE: f64 = 0.8;
+
+/// How much to move the split edge so `pane` — when it is the right-hand
+/// side of a left/right split — keeps `1 - LEFT_SHARE` of it. `None` when
+/// it is not a right-hand pane or already narrow enough.
+pub fn narrowing(layout: &serde_json::Value, pane: &str) -> Option<f64> {
+    let layout = layout.pointer("/result/layout")?;
+    let rect = layout
+        .get("panes")?
+        .as_array()?
+        .iter()
+        .find(|p| p.get("pane_id").and_then(serde_json::Value::as_str) == Some(pane))?
+        .get("rect")?;
+    let field =
+        |value: &serde_json::Value, name: &str| value.get(name).and_then(serde_json::Value::as_f64);
+    let (x, y, width) = (field(rect, "x")?, field(rect, "y")?, field(rect, "width")?);
+    // The innermost left/right split whose right-hand side is this pane.
+    let split = layout
+        .get("splits")?
+        .as_array()?
+        .iter()
+        .filter(|split| split.get("direction").and_then(serde_json::Value::as_str) == Some("right"))
+        .filter_map(|split| {
+            let area = split.get("rect")?;
+            let (sx, sy, sw, sh) = (
+                field(area, "x")?,
+                field(area, "y")?,
+                field(area, "width")?,
+                field(area, "height")?,
+            );
+            let right_side = x > sx && (x + width - (sx + sw)).abs() < 1.0;
+            let covers = y >= sy && y < sy + sh;
+            (right_side && covers).then(|| (sw, field(split, "ratio")))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))?;
+    let ratio = split.1?;
+    let amount = LEFT_SHARE - ratio;
+    (amount > 0.01).then_some(amount)
+}
+
+/// Makes the pane a narrow column when it was opened as a right-hand split.
+fn narrow(herdr: &Herdr, pane: &str) {
+    let Ok(layout) = herdr.call(&dashr_herdr::cli::argv::pane_layout(pane)) else {
+        return;
+    };
+    if let Some(amount) = narrowing(&layout, pane) {
+        let _ = herdr.call(&dashr_herdr::cli::argv::pane_resize(pane, "right", amount));
+    }
 }
 
 fn wait(stop: &AtomicBool, duration: Duration) {
@@ -475,43 +504,14 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         })
     };
 
-    // View.
-    let browser = Browser::new(&config.browser.command);
-    let mut note = String::new();
-    if config.browser.enabled && browser.installed() {
-        match browser
-            .open_command(&record.kiosk_url(), &record.runtime_dir)
-            .spawn()
-        {
-            Ok(mut child) => loop {
-                if stop.load(Ordering::SeqCst) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break;
-                }
-                match child.try_wait() {
-                    Ok(Some(_)) | Err(_) => {
-                        note = "terminal-browser exited; showing the text view.".into();
-                        break;
-                    }
-                    Ok(None) => std::thread::sleep(Duration::from_millis(200)),
-                }
-            },
-            Err(error) => note = format!("terminal-browser failed to start: {error}"),
-        }
-    } else if config.browser.enabled {
-        note = "terminal-browser is not installed (https://github.com/zenbu-labs/terminal-browser); text view.".into();
-    }
-    if !chat_note.is_empty() {
-        note = if note.is_empty() {
-            chat_note
-        } else {
-            format!("{chat_note}\n{note}")
-        };
-    }
+    // View: the link and one line of health in a narrow pane. The human
+    // opens Grafana in their own browser, which follows dashboard changes by
+    // itself (Grafana Live) — no browser inside the pane (DEC-040).
+    narrow(&herdr, &pane_id);
+    let note = chat_note;
     while !stop.load(Ordering::SeqCst) {
         let tick = latest.lock().ok().and_then(|slot| slot.clone());
-        render_text_view(&mut std::io::stdout(), &record, tick.as_ref(), &note);
+        render_status(&mut std::io::stdout(), &record, tick.as_ref(), &note);
         wait(&stop, Duration::from_secs(2));
     }
 
@@ -625,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn text_view_shows_url_panels_and_alerts_but_no_values() {
+    fn status_shows_the_link_and_one_health_line_only() {
         let tick = Tick {
             summary: dashr_runtime::status::Summary {
                 ok: 1,
@@ -637,12 +637,65 @@ mod tests {
             ..Tick::default()
         };
         let mut out = Vec::new();
-        render_text_view(&mut out, &record(), Some(&tick), "note");
+        render_status(&mut out, &record(), Some(&tick), "");
         let text = String::from_utf8(out).unwrap();
         assert!(
-            text.contains("http://127.0.0.1:32768/d/dashr-abcd-w1-p1?orgId=1&kiosk&refresh=5s")
+            text.contains("\nhttp://127.0.0.1:32768/d/dashr-abcd-w1-p1\n"),
+            "{text}"
         );
-        assert!(text.contains("1 ok · 1 err"));
+        assert!(text.contains("panels 1 ok · 1 err"));
         assert!(text.contains("DLQ not empty"));
+        // Narrow: no line of text wider than the link.
+        let widest = text
+            .lines()
+            .map(|line| strip_ansi(line).chars().count())
+            .max()
+            .unwrap();
+        assert!(
+            widest <= "http://127.0.0.1:32768/d/dashr-abcd-w1-p1".len(),
+            "{text}"
+        );
+    }
+
+    fn strip_ansi(line: &str) -> String {
+        let mut out = String::new();
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_right_hand_pane_is_narrowed_to_a_fifth() {
+        // `herdr pane layout` after `pane split w1:p1 --direction right`.
+        let layout = json!({"result": {"layout": {
+            "panes": [
+                {"pane_id": "w1:p1", "rect": {"height": 40, "width": 60, "x": 0, "y": 0}},
+                {"pane_id": "w1:p2", "rect": {"height": 40, "width": 60, "x": 60, "y": 0}}
+            ],
+            "splits": [{"direction": "right", "ratio": 0.5, "rect": {"height": 40, "width": 120, "x": 0, "y": 0}}]
+        }}});
+        let amount = narrowing(&layout, "w1:p2").unwrap();
+        assert!((amount - 0.3).abs() < 1e-9, "{amount}");
+        // The left pane, or a pane already narrow, is left alone.
+        assert_eq!(narrowing(&layout, "w1:p1"), None);
+        let mut narrow = layout.clone();
+        narrow["result"]["layout"]["splits"][0]["ratio"] = json!(0.8);
+        assert_eq!(narrowing(&narrow, "w1:p2"), None);
+        // A pane on top of a down split (the action's tab) is left alone.
+        let tab = json!({"result": {"layout": {
+            "panes": [{"pane_id": "w1:p2", "rect": {"height": 25, "width": 120, "x": 0, "y": 0}}],
+            "splits": [{"direction": "down", "ratio": 0.62, "rect": {"height": 40, "width": 120, "x": 0, "y": 0}}]
+        }}});
+        assert_eq!(narrowing(&tab, "w1:p2"), None);
     }
 }

@@ -8,9 +8,10 @@ You only talk to your AI session. Paste a CodePipeline link and say
 *"visualize it on a dashboard"*: its herdr-dashr skill opens the dashboard
 pane beside you and builds the dashboard, then keeps changing it as you ask.
 
-- **Real Grafana, in the terminal.** The top pane shows Grafana in kiosk mode
-  through [terminal-browser](https://github.com/zenbu-labs/terminal-browser);
-  without it, a text status view.
+- **Real Grafana, in your browser.** The dashr pane is a narrow column on the
+  right with the dashboard's link and its health; Ctrl-click the link to open
+  Grafana in Chrome (or any browser). It follows every change the agent makes
+  by itself.
 - **No model in the data path.** Grafana refreshes the data. The agent only
   changes the dashboard, through the `dashr` tools (a command line, or MCP).
 - **Privacy by construction.** The agent designs from schemas and masked
@@ -30,8 +31,8 @@ pane beside you and builds the dashboard, then keeps changing it as you ask.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.1.3, on GitHub and npm, for Linux, macOS and Windows. Windows support and the AI-session flow are new; everything else is verified, most by an end-to-end
-suite that runs a real Herdr, a real Grafana and terminal-browser in CI.
+**Status:** v0.1.4, on GitHub and npm, for Linux, macOS and Windows. Windows support and the AI-session flow are new; everything else is verified, most by an end-to-end
+suite that runs a real Herdr, a real Grafana and a real Chrome in CI.
 
 ## Install
 
@@ -46,9 +47,8 @@ directory, as herdr-remote-channel does: npm installs the one platform
 package whose prebuilt `dashr` matches your machine (verified against the
 release's SHA-256 before it was packed), and every Herdr entry point runs it
 through `node node_modules/herdr-dashr/bin.js`. You need Node.js 18+ and
-Docker; no Rust toolchain. terminal-browser (for the real Grafana UI; it
-refuses to run as root), Claude Code (the chat pane) and the AWS CLI
-(CodePipeline, CloudWatch) are optional — run the **Check dashr
+Docker; no Rust toolchain. Claude Code and the AWS CLI (CodePipeline,
+CloudWatch) are optional — run the **Check dashr
 prerequisites** action to see what is missing.
 
 Another build step installs the **herdr-dashr skill** for Claude Code with
@@ -58,8 +58,7 @@ session also needs the `dashr` command: `npm install -g herdr-dashr` (the
 skill runs it for you when `dashr` is missing).
 
 On Windows, Docker Desktop must be running, and the chat pane's shell is
-PowerShell. Without terminal-browser the dashboard pane shows the Grafana URL;
-Ctrl-click it to open Grafana in your browser.
+PowerShell.
 
 ### The CLI on its own
 
@@ -97,8 +96,8 @@ tab with Grafana on top and a new agent underneath:
 | **Promote dashboard to persistent Grafana** | Copies the focused session's dashboard (needs `[promote]`). |
 | **Check dashr prerequisites** | Doctor popup. |
 
-Close the dashboard pane to stop Grafana; the container, runtime files and
-browser profile are deleted. The sidebar token `$dashr` shows panel health
+Close the dashboard pane to stop Grafana; the container and runtime files are
+deleted. The sidebar token `$dashr` shows panel health
 (`6 ok · 1 err · 1 alert`).
 
 ### Saved dashboards
@@ -188,7 +187,7 @@ you say `personal = false`.
 - `panel_status` reports rows and errors, never values. Watches are evaluated
   by the pane; the agent never sees what it alerts on.
 - Grafana runs with a read-only root, tmpfs storage, no logs, no swap and no
-  capabilities, on loopback only. The browser profile lives in memory. In
+  capabilities, on loopback only. In
   OpenTelemetry mode, logs, traces and metrics are kept on disk in anonymous
   Docker volumes that are deleted with the container.
 

@@ -59,6 +59,12 @@ The dashboard gains, at the top:
 - **Live log trail**: every line, newest first, expected matches on green,
   forbidden ones on red.
 
+The tiles count from the dashboard's time range, which arming sets to the
+moment of arming. A browser tab that was already open keeps its own range,
+so after arming ask the human to Ctrl-click the link in the dashr pane again
+(a fresh tab counts from arming). Your `log_expectations` verdict is exact
+either way.
+
 The pane notifies the human as each expected message arrives, and marks
 itself blocked when a forbidden one does. Afterwards `log_expectations`
 answers with counts per expectation and `passed`. Report that, e.g. "2 of 3

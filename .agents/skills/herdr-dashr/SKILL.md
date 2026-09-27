@@ -51,8 +51,9 @@ dashr wait --session <pane_id>
 
 `dashr wait` prints the `session` id and a `brief`: what is already on the
 dashboard (for a pipeline, a first dashboard of its stages, Lambdas, queues
-and log groups) and what to do next. Say in one line that the dashboard is
-open beside them, then build.
+and log groups) and what to do next. The pane is a narrow column showing the
+dashboard's link; the human Ctrl-clicks it to open Grafana in their browser.
+Say that in one line, then build.
 
 The human closes the pane when they are done; closing it deletes the
 Grafana and everything in it. Close it yourself only when asked:
@@ -111,7 +112,8 @@ one in twenty.
    `reference/dashboard-json.md`.
 4. **Apply.** `apply_dashboard` with the whole dashboard. dashr validates
    datasource references, assigns ids and layout where missing, pins the uid,
-   refresh and tags, and reloads the dashboard pane.
+   refresh and tags. The human watches it in their own browser, which
+   shows the change within seconds without a reload.
 5. **Verify.** `panel_status`. Every panel should be `ok`. For each `empty` or
    `error` panel: read the (masked) error, `probe_query` a simpler version,
    fix, re-apply. Never leave a broken panel on the dashboard; remove it if

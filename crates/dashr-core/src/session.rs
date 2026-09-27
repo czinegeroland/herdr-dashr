@@ -64,6 +64,13 @@ impl SessionRecord {
         format!("http://127.0.0.1:{}", self.port)
     }
 
+    /// The link the dashboard pane shows, to open in the human's own
+    /// browser. Short enough to fit the narrow pane on one line; the
+    /// dashboard itself carries its refresh interval (DEC-040).
+    pub fn dashboard_url(&self) -> String {
+        format!("{}/d/{}", self.grafana_url(), self.dashboard_uid)
+    }
+
     /// The URL the browser pane shows: kiosk mode hides Grafana's chrome,
     /// `refresh` keeps data live with no agent involved (DASHR-VIEW-001).
     pub fn kiosk_url(&self) -> String {
