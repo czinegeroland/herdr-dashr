@@ -10,6 +10,10 @@ Ask for a dashboard and keep talking. Your agent opens a small dashr pane next
 to the conversation and builds the dashboard; Ctrl-click the link to watch it
 live in your browser. It changes as you ask.
 
+<img width="1648" height="945" alt="image" src="https://github.com/user-attachments/assets/56602517-9021-4c66-810c-c86e03a50df1" />
+
+<img width="1916" height="909" alt="image" src="https://github.com/user-attachments/assets/5807e138-2b71-41ee-9c75-ab11f267d22b" />
+
 **Nothing left behind.** Each pane runs its own Grafana in Docker. Close the
 pane and it's gone.
 
