@@ -8,18 +8,21 @@
 
 id = "herdr-dashr"
 name = "Herdr Dashr"
-version = "0.1.5"
+version = "0.1.6"
 min_herdr_version = "0.9.0"
 description = "Live Grafana dashboards in a Herdr pane."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["cmd", "/c", "npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.5"]
+command = ["cmd", "/c", "npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.6"]
 platforms = ["windows"]
 
 [[build]]
-command = ["npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.5"]
+command = ["npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@0.1.6"]
 platforms = ["linux", "macos"]
+
+[[build]]
+command = ["node", "node_modules/herdr-dashr/bin.js", "global", "install", "--best-effort"]
 
 [[build]]
 command = ["cmd", "/c", "npx", "--yes", "skills", "add", "czinegeroland/herdr-dashr", "--skill", "herdr-dashr", "--agent", "claude-code", "--global", "--yes"]

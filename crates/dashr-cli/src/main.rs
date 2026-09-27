@@ -72,6 +72,12 @@ enum Command {
         #[arg(long)]
         args_file: Option<PathBuf>,
     },
+    /// Install the `dashr` command globally with npm, at this version, so the
+    /// human's AI session can run it. The plugin's build step runs it.
+    Global {
+        #[command(subcommand)]
+        command: GlobalCommand,
+    },
     /// Manage sessions without Herdr.
     Session {
         #[command(subcommand)]
@@ -163,6 +169,16 @@ enum Command {
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum GlobalCommand {
+    /// `npm install -g herdr-dashr@<this version>`.
+    Install {
+        /// Report a failure instead of failing (the plugin build step).
+        #[arg(long)]
+        best_effort: bool,
     },
 }
 
@@ -299,6 +315,9 @@ fn run(cli: Cli) -> Result<()> {
             HerdrCommand::Startup => herdr_cmds::startup(&paths),
         },
         Command::Mcp { session, herdr_bin } => standalone::mcp(&paths, &session, herdr_bin),
+        Command::Global {
+            command: GlobalCommand::Install { best_effort },
+        } => standalone::global_install(best_effort),
         Command::Wait { session, timeout } => agent::wait(
             &paths,
             session.as_deref(),

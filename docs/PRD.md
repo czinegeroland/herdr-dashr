@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T13:00:00Z |
+| Last updated | 2026-09-27T16:10:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -164,6 +164,7 @@ Crates:
 | DASHR-HERDR-008 | The plugin declares and supports Linux, macOS and Windows. | Must | Implemented | Manifest `platforms`; unit tests on all three in `.github/workflows/build-and-test.yml` (Windows also run under Wine before merging); e2e on Linux; a real Windows install pending |
 | DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
 | DASHR-HERDR-010 | A dashboard pane the human's AI session opens itself (`herdr plugin pane open --plugin herdr-dashr --entrypoint dashboard`, split beside it) opens no chat pane: that session drives it. Only the Herdr actions open a chat pane with its own agent. The pane writes the briefing `dashr wait` hands the session. | Must | Verified | AC-AGENT in `scripts/e2e/run.sh` |
+| DASHR-HERDR-011 | Installing the plugin also installs the `dashr` command globally at the plugin's own version (`dashr global install --best-effort`, which runs `npm install -g herdr-dashr@<version>`, through `cmd /c` on Windows), so the human's AI session can run it without a manual step. A failed global install is reported with the command to run by hand, and never fails the plugin install. | Must | Implemented | `herdr-plugin.toml` build step; `installs_this_version_through_cmd_on_windows`, `installs_from_npm_on_every_platform_including_windows`; best-effort path checked by hand; awaiting a real install |
 
 ### 8.2 Grafana lifecycle (GRAF)
 
@@ -446,12 +447,13 @@ Crates:
 | 2026-09-27 | The pane shows a link, not a browser (DEC-040). It is a narrow column that sizes itself, with the link, panel health, alerts and the OTLP endpoint. terminal-browser is dropped from the pane, the doctor and CI. The e2e browser scenarios now open the pane's link in a real Chrome and check that the tab follows the agent's changes without reloading. Version 0.1.4. | VIEW-001, VIEW-002, VIEW-003, VIEW-004, SEC-005 |
 | 2026-09-27 | Pane watchdog: the pane process checks every monitor tick that its pane still exists. After two misses it stops Grafana, deletes its files and exits. On Windows an orphaned `dashr.exe` had kept the container running and made `herdr plugin uninstall` fail with OS error 32. Version 0.1.5. | GRAF-010 |
 | 2026-09-27 | Dashboard-only page (DEC-041). The pane's link opens a loopback page showing Grafana's shared view of the dashboard, with no Grafana UI, not even after Esc. It reloads the dashboard within about 2 s of every change. The e2e Chrome scenario checks that no Grafana menu word is visible. Released with 0.1.5. | VIEW-001, VIEW-002, VIEW-004, VIEW-005 |
+| 2026-09-27 | The plugin install also puts `dashr` on the PATH with a new build step (`dashr global install --best-effort` → `npm install -g herdr-dashr@<version>`), so the AI session needs no manual `npm install -g`. A failure is reported and never fails the install. Version 0.1.6. | HERDR-011 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 10 | 8 | 2 | 0 |
+| HERDR | 11 | 8 | 3 | 0 |
 | GRAF | 10 | 10 | 0 | 0 |
 | DS | 6 | 6 | 0 | 0 |
 | VIEW | 5 | 5 | 0 | 0 |
@@ -467,7 +469,7 @@ Crates:
 | LIB | 4 | 4 | 0 | 0 |
 | GOV/TECH | 8 | 6 | 2 | 0 |
 | SEC | 8 | 8 | 0 | 0 |
-| **All** | 103 | 97 | 6 | 0 |
+| **All** | 104 | 97 | 7 | 0 |
 
 ## 15. Acceptance criteria
 

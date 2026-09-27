@@ -175,6 +175,12 @@ fn manifest(version: &'static str) -> Manifest {
                 command: npm_install(&[], version),
                 platforms: Some(vec!["linux", "macos"]),
             },
+            // The `dashr` command on the human's PATH, for their AI session;
+            // never fails the install (DASHR-HERDR-011).
+            Build {
+                command: dashr(&["global", "install", "--best-effort"]),
+                platforms: None,
+            },
             // The agent skill, installed for Claude Code with the `skills`
             // CLI straight from this repository, as herdr-remote-channel
             // does (DEC-039). It teaches the human's own AI session to open
@@ -316,11 +322,16 @@ mod tests {
             "--global",
             "--yes",
         ];
-        assert_eq!(argv(2)[..2], ["cmd", "/c"]);
-        assert_eq!(argv(2)[2..], skills);
-        assert_eq!(build[2]["platforms"][0].as_str(), Some("windows"));
-        assert_eq!(argv(3), skills);
-        assert_eq!(build.len(), 4);
+        assert_eq!(
+            argv(2),
+            ["node", LAUNCHER, "global", "install", "--best-effort"]
+        );
+        assert!(build[2].get("platforms").is_none());
+        assert_eq!(argv(3)[..2], ["cmd", "/c"]);
+        assert_eq!(argv(3)[2..], skills);
+        assert_eq!(build[3]["platforms"][0].as_str(), Some("windows"));
+        assert_eq!(argv(4), skills);
+        assert_eq!(build.len(), 5);
         // Every entry point runs the launcher with node: no shell, no .cmd.
         assert!(!text.contains("\"sh\""));
         assert!(!text.contains("bin/dashr"));

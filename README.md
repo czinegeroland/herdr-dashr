@@ -31,7 +31,7 @@ pane beside you and builds the dashboard, then keeps changing it as you ask.
 
 `docs/PRD.md` is the authoritative specification and delivery ledger.
 
-**Status:** v0.1.5, on GitHub and npm, for Linux, macOS and Windows. Windows support and the AI-session flow are new; everything else is verified, most by an end-to-end
+**Status:** v0.1.6, on GitHub and npm, for Linux, macOS and Windows. Windows support and the AI-session flow are new; everything else is verified, most by an end-to-end
 suite that runs a real Herdr, a real Grafana and a real Chrome in CI.
 
 ## Install
@@ -53,9 +53,11 @@ prerequisites** action to see what is missing.
 
 Another build step installs the **herdr-dashr skill** for Claude Code with
 `npx skills add czinegeroland/herdr-dashr --skill herdr-dashr --agent
-claude-code --global`, as herdr-remote-channel installs its skill. Your AI
-session also needs the `dashr` command: `npm install -g herdr-dashr` (the
-skill runs it for you when `dashr` is missing).
+claude-code --global`, as herdr-remote-channel installs its skill. The install
+also puts the `dashr` command on your PATH (`npm install -g
+herdr-dashr@<version>`) for your AI session. If npm cannot install globally
+(permissions, or a running `dashr` on Windows) the plugin still installs,
+and the skill runs that command when `dashr` is missing.
 
 On Windows, Docker Desktop must be running, and the chat pane's shell is
 PowerShell.
