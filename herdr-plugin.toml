@@ -9,11 +9,11 @@ description = "Live Grafana dashboards your AI agent builds, right beside your c
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["cmd", "/c", "npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@1.0.1"]
+command = ["cmd", "/c", "npm", "install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@1.0.1"]
 platforms = ["windows"]
 
 [[build]]
-command = ["npm", "install", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@1.0.1"]
+command = ["npm", "install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@1.0.1"]
 platforms = ["linux", "macos"]
 
 [[build]]

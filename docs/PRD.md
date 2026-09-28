@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-27T23:30:00Z |
+| Last updated | 2026-09-28T00:30:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -159,7 +159,7 @@ Crates:
 | DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Verified | AC-PIPELINE in `scripts/e2e/run.sh`; `link_pattern_matches_both_consoles` |
 | DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Verified | Startup reaper scenario in `scripts/e2e/run.sh` |
 | DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
-| DASHR-HERDR-006 | Installing needs no Rust toolchain and no shell: the build step runs `npm install --no-save herdr-dashr@<version>` (through `cmd /c` on Windows), pinned to the manifest version, and every entry point runs `node node_modules/herdr-dashr/bin.js`, as herdr-remote-channel does (DEC-038). | Must | Implemented | `installs_from_npm_on_every_platform_including_windows`; e2e runs every Herdr entry point through the launcher (`scripts/e2e/run.sh`); v0.1.1 on npm and a real Windows install pending |
+| DASHR-HERDR-006 | Installing needs no Rust toolchain and no shell: the build step runs `npm install --prefix . --no-save herdr-dashr@<version>` (through `cmd /c` on Windows; `--prefix .` because npm otherwise installs into the first parent directory with a `package.json`, such as the home directory), pinned to the manifest version, and every entry point runs `node node_modules/herdr-dashr/bin.js`, as herdr-remote-channel does (DEC-038). | Must | Implemented | `installs_from_npm_on_every_platform_including_windows`; e2e runs every Herdr entry point through the launcher (`scripts/e2e/run.sh`); v0.1.1 on npm and a real Windows install pending |
 | DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
 | DASHR-HERDR-008 | The plugin declares and supports Linux, macOS and Windows. | Must | Implemented | Manifest `platforms`; unit tests on all three in `.github/workflows/build-and-test.yml` (Windows also run under Wine before merging); e2e on Linux; a real Windows install pending |
 | DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
@@ -477,6 +477,7 @@ Crates:
 | 2026-09-27 | Removed the `Unpublish from npm` workflow: npm refuses unpublishing with a token that bypasses 2FA, so the owner removes the 0.1.x test versions by hand. | none (workflow removal) |
 | 2026-09-27 | Live collectors (DEC-043). New `dashr discover`, and `dashr collect` with docker, host, process, logs, stream, exec, scrape, postgres, mysql and redis, run by the pane. The skill now leads with discover → collect → system dashboard for any environment, with new `reference/collectors.md` and `reference/environments.md`. The OTLP address left the pane, and the pane logs its chat-pane decisions (`pane.log`) to diagnose AC-OPEN's intermittent missing chat pane. Version 1.0.1. | COLL-001, COLL-002, COLL-003, COLL-004, COLL-005, COLL-006 |
 | 2026-09-27 | Database query performance (DEC-044): new `dashr db add/dashboard/list/remove/plan` for PostgreSQL and SQL Server, local or in any cloud, including through a password command and a tunnel command. It brings a PostgreSQL dashboard, a SQL Server dashboard rewriting the human's two procedures, a database collector run by the pane, the skill's `reference/databases.md`, and the AC-DB and AC-DB-MSSQL end-to-end scenarios. Not released. | DB-001, DB-002, DB-003, DB-004, DB-005, DB-006 |
+| 2026-09-28 | Windows install fix: `herdr plugin install` failed at `bin.js global install` with MODULE_NOT_FOUND when a parent directory of the plugin checkout (the user's home) had a `package.json`, because npm installed herdr-dashr there. The build step now passes `--prefix .`. | HERDR-006 |
 
 ### Requirement completion summary
 
