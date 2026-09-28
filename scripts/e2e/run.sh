@@ -756,6 +756,7 @@ out = json.load(open(sys.argv[1]))
 assert out["datasource"] == "db-shop" and out["engine"] == "postgres", out
 assert out["capabilities"]["pg_stat_statements"] is True, out
 assert out["live_series"] is True, out
+assert out["collector"] == "ok", out
 EOF2
 grep -rq 'e2e-db-secret' "$STATE_DIR" "$WORK/db-add.json" && fail "the database password reached a state file or the agent"
 ok "db add connected Grafana through the tunnel with the command's password; only flags came back"

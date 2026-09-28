@@ -54,6 +54,11 @@ dashr db add orders --engine postgres --host db.internal --port 5432 \
 A database on this machine's loopback (a tunnel, a local server) is fine:
 dashr makes it reachable from the Grafana container itself.
 
+The pane keeps the tunnel, the password and that loopback relay up, so they
+need a pane opened with `DASHR_OTEL=1`; `add` returns once the pane's
+collector for the database is `ok` (its `collector` field), and the
+dashboard's tables work from then on.
+
 ### AWS RDS / Aurora PostgreSQL through the AWS CLI
 
 Typical for an ephemeral environment: no connection string, only `aws`.

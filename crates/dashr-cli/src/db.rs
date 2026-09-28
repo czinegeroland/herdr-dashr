@@ -254,6 +254,24 @@ pub fn add(paths: &Paths, session: Option<&str>, args: crate::DbAdd) -> Result<(
         .map(command_argv)
         .unwrap_or_default();
 
+    let relay_port = Relay::needed(&connection.host).then_some(connection.port);
+    // A tunnel, a relay or a short-lived password must be kept up after this
+    // command exits, and only the pane's collectors do that.
+    let live = record.otlp.is_some();
+    if !live && (!tunnel_command.is_empty() || !password_command.is_empty() || relay_port.is_some())
+    {
+        return Err(format!(
+            "{name} needs the dashboard pane to keep its {} up, and this session runs no collectors: open the pane with DASHR_OTEL=1",
+            if !tunnel_command.is_empty() {
+                "tunnel"
+            } else if !password_command.is_empty() {
+                "password"
+            } else {
+                "loopback relay"
+            }
+        ));
+    }
+
     // Bring the path up for the checks: the tunnel, the relay, the password.
     let mut tunnel = (!tunnel_command.is_empty()).then(|| Tunnel::new(&tunnel_command));
     if let Some(tunnel) = tunnel.as_mut() {
@@ -270,8 +288,7 @@ pub fn add(paths: &Paths, session: Option<&str>, args: crate::DbAdd) -> Result<(
             ));
         }
     }
-    let relay_port = Relay::needed(&connection.host).then_some(connection.port);
-    let _relay = match relay_port {
+    let relay = match relay_port {
         Some(port) => dbcollect::relay_for("127.0.0.1", port)?,
         None => None,
     };
@@ -291,9 +308,11 @@ pub fn add(paths: &Paths, session: Option<&str>, args: crate::DbAdd) -> Result<(
         return Err(format!("Grafana cannot connect to {name}: {error}"));
     }
     let caps = capabilities(&client, &name, connection.engine);
+    // Hand the path over to the pane, which binds the same ports.
     if let Some(mut tunnel) = tunnel {
         tunnel.stop();
     }
+    drop(relay);
 
     record.datasources.retain(|policy| policy.uid != uid);
     record.datasources.push(DatasourcePolicy {
@@ -306,7 +325,7 @@ pub fn add(paths: &Paths, session: Option<&str>, args: crate::DbAdd) -> Result<(
     });
     store.save(&record).map_err(|error| error.to_string())?;
 
-    let live = record.otlp.is_some();
+    let mut collector_state = json!("none");
     if live {
         let collector = Collector::Database {
             name: name.clone(),
@@ -325,9 +344,13 @@ pub fn add(paths: &Paths, session: Option<&str>, args: crate::DbAdd) -> Result<(
         store
             .save_collectors(&record.session_id, &collectors)
             .map_err(|error| error.to_string())?;
+        // The dashboard's tables go through the path the pane now keeps up:
+        // answer once they can.
+        collector_state = wait_for_collector(&record, &id, Duration::from_secs(90));
     }
     print(&json!({
         "added": name,
+        "collector": collector_state,
         "engine": connection.engine,
         "datasource": uid,
         "capabilities": caps.report,
@@ -339,6 +362,27 @@ pub fn add(paths: &Paths, session: Option<&str>, args: crate::DbAdd) -> Result<(
             "This session has no Prometheus, so there are no live trend series; the dashboard's tables still query the database on every refresh. Open the pane with DASHR_OTEL=1 for trends."
         },
     }))
+}
+
+/// Waits for the pane to report the collector `id`; its last state, or
+/// "starting" when the pane has not reached it yet.
+fn wait_for_collector(record: &SessionRecord, id: &str, timeout: Duration) -> Value {
+    let started = std::time::Instant::now();
+    let mut last = json!("starting");
+    while started.elapsed() < timeout {
+        if let Some(state) = std::fs::read(record.runtime_dir.join(COLLECTOR_HEALTH_FILE))
+            .ok()
+            .and_then(|text| serde_json::from_slice::<Value>(&text).ok())
+            .and_then(|health| health.get(id).cloned())
+        {
+            if state == "ok" {
+                return state;
+            }
+            last = state;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    last
 }
 
 fn find_collector(store: &SessionStore, record: &SessionRecord, name: &str) -> Option<Collector> {
