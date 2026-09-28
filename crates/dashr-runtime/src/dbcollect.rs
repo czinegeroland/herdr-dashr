@@ -125,11 +125,18 @@ impl Tunnel {
 
     pub fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
+            // The child leads its own group (`process_group(0)`), so its pid
+            // is the group id. `--` is required: without it procps-ng
+            // 4.0.4's `kill -TERM -<pid>` reads the pid as an option and
+            // signals the group of its first digit, which for a pid
+            // starting with 1 is -1, every process on the machine.
             #[cfg(unix)]
-            let _ = Command::new("kill")
-                .args(["-TERM", &format!("-{}", child.id())])
-                .stderr(Stdio::null())
-                .status();
+            if let Some(group) = group_target(child.id()) {
+                let _ = Command::new("kill")
+                    .args(["-TERM", "--", &group])
+                    .stderr(Stdio::null())
+                    .status();
+            }
             #[cfg(windows)]
             let _ = Command::new("taskkill")
                 .args(["/T", "/F", "/PID", &child.id().to_string()])
@@ -140,6 +147,12 @@ impl Tunnel {
             let _ = child.wait();
         }
     }
+}
+
+/// The `kill` operand for the process group led by `pid`; never 0, -1 or
+/// an init's group, which would signal far more than the tunnel.
+fn group_target(pid: u32) -> Option<String> {
+    (pid > 1).then(|| format!("-{pid}"))
 }
 
 impl Drop for Tunnel {
@@ -656,6 +669,13 @@ mod tests {
             Relay::start("127.0.0.2", port).unwrap().is_some(),
             "the next relay binds the same port"
         );
+    }
+
+    #[test]
+    fn only_a_real_process_group_is_signalled() {
+        assert_eq!(group_target(0), None);
+        assert_eq!(group_target(1), None);
+        assert_eq!(group_target(48213).as_deref(), Some("-48213"));
     }
 
     #[test]

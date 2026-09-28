@@ -11,7 +11,7 @@
 | Document status | Draft |
 | PRD version | 0.1.0 |
 | Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-28T09:00:00Z |
+| Last updated | 2026-09-28T09:30:00Z |
 | Product owner | @czinegeroland |
 | Source handoff | `docs/DESIGN.md` |
 
@@ -478,6 +478,7 @@ Crates:
 | 2026-09-27 | Live collectors (DEC-043). New `dashr discover`, and `dashr collect` with docker, host, process, logs, stream, exec, scrape, postgres, mysql and redis, run by the pane. The skill now leads with discover → collect → system dashboard for any environment, with new `reference/collectors.md` and `reference/environments.md`. The OTLP address left the pane, and the pane logs its chat-pane decisions (`pane.log`) to diagnose AC-OPEN's intermittent missing chat pane. Version 1.0.1. | COLL-001, COLL-002, COLL-003, COLL-004, COLL-005, COLL-006 |
 | 2026-09-27 | Database query performance (DEC-044): new `dashr db add/dashboard/list/remove/plan` for PostgreSQL and SQL Server, local or in any cloud, including through a password command and a tunnel command. It brings a PostgreSQL dashboard, a SQL Server dashboard rewriting the human's two procedures, a database collector run by the pane, the skill's `reference/databases.md`, and the AC-DB and AC-DB-MSSQL end-to-end scenarios. Version 1.1.0. | DB-001, DB-002, DB-003, DB-004, DB-005, DB-006 |
 | 2026-09-28 | Windows install fix: `herdr plugin install` failed at `bin.js global install` with MODULE_NOT_FOUND when a parent directory of the plugin checkout (the user's home) had a `package.json`, because npm installed herdr-dashr there. The build step now passes `--prefix .`. | HERDR-006 |
+| 2026-09-28 | Stopping a database's tunnel signalled every process on the machine when the tunnel's pid started with 1: procps-ng 4.0.4's `kill -TERM -<pid>` reads the pid as an option. It was found when the end-to-end suite's `db remove` shut down the GitHub runner. The group is now signalled as `kill -TERM -- -<pid>`, and never for a pid of 0 or 1. Before release. | DB-002 |
 
 ### Requirement completion summary
 
