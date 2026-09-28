@@ -53,6 +53,30 @@ pub enum Collector {
     Mysql { container: String },
     /// A Redis container.
     Redis { container: String },
+    /// A database added with `dashr db add`, sampled through its Grafana
+    /// datasource (DEC-044). `password_command` prints a fresh password
+    /// (an IAM token, a secret) and is re-run every `refresh_secs`;
+    /// `tunnel_command` (SSM port forwarding, `ssh -L`) is kept running.
+    Database {
+        name: String,
+        engine: crate::dbperf::Engine,
+        #[serde(default)]
+        password_command: Vec<String>,
+        #[serde(default)]
+        refresh_secs: u64,
+        #[serde(default)]
+        tunnel_command: Vec<String>,
+        /// Whether per-statement statistics are available.
+        #[serde(default)]
+        statements: bool,
+        /// Azure SQL Database: database-scoped waits and resource stats.
+        #[serde(default)]
+        azure: bool,
+        /// A loopback port the Grafana container reaches through a relay
+        /// (Linux; a tunnel or a server bound to 127.0.0.1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay_port: Option<u16>,
+    },
 }
 
 impl Collector {
@@ -69,6 +93,7 @@ impl Collector {
             Collector::Postgres { container } => format!("postgres:{container}"),
             Collector::Mysql { container } => format!("mysql:{container}"),
             Collector::Redis { container } => format!("redis:{container}"),
+            Collector::Database { name, .. } => format!("db:{name}"),
         }
     }
 
@@ -77,6 +102,7 @@ impl Collector {
         match self {
             Collector::Exec { every_secs, .. } => (*every_secs).max(MIN_EXEC_SECS),
             Collector::Scrape { .. } => 15,
+            Collector::Database { .. } => 30,
             _ => 5,
         }
     }

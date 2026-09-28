@@ -30,14 +30,14 @@ use crate::otlp::Exporter;
 /// Each collector's state for the pane: `Ok(())` or the last error.
 pub type Health = Arc<Mutex<BTreeMap<String, Result<(), String>>>>;
 
-fn now_nanos() -> u128 {
+pub(crate) fn now_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
 }
 
-fn now_secs() -> f64 {
+pub(crate) fn now_secs() -> f64 {
     now_nanos() as f64 / 1e9
 }
 
@@ -51,8 +51,10 @@ fn sleep_unless(flags: &[&AtomicBool], duration: Duration) {
     }
 }
 
-/// Runs the session's collectors until `stop`.
+/// Runs the session's collectors until `stop`. `grafana` is the session's
+/// Grafana, which database collectors query through.
 pub fn run(
+    grafana: String,
     exporter: Exporter,
     store: SessionStore,
     session_id: String,
@@ -87,6 +89,7 @@ pub fn run(
             let removed = Arc::new(AtomicBool::new(false));
             spawn_worker(
                 collector.clone(),
+                grafana.clone(),
                 exporter.clone(),
                 Arc::clone(&stop),
                 Arc::clone(&removed),
@@ -109,6 +112,7 @@ fn report(health: &Health, id: &str, result: Result<(), String>) {
 
 fn spawn_worker(
     collector: Collector,
+    grafana: String,
     exporter: Exporter,
     stop: Arc<AtomicBool>,
     removed: Arc<AtomicBool>,
@@ -118,6 +122,12 @@ fn spawn_worker(
         let id = collector.id();
         if let Collector::Stream { service, command } = &collector {
             stream(&id, service, command, &exporter, &stop, &removed, &health);
+            return;
+        }
+        if let Collector::Database { .. } = &collector {
+            crate::dbcollect::run(
+                &id, &collector, &grafana, &exporter, &stop, &removed, &health,
+            );
             return;
         }
         let every = Duration::from_secs(collector.every_secs());
@@ -257,6 +267,7 @@ impl Sampler {
             Collector::Postgres { container }
             | Collector::Mysql { container }
             | Collector::Redis { container } => container.clone(),
+            Collector::Database { name, .. } => name.clone(),
         }
     }
 
@@ -273,6 +284,7 @@ impl Sampler {
             Collector::Mysql { container } => self.mysql(&container),
             Collector::Redis { container } => self.redis(&container),
             Collector::Stream { .. } => Ok(Vec::new()),
+            Collector::Database { .. } => Err("a database is sampled by its own worker".into()),
         }
     }
 

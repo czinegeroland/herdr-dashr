@@ -163,6 +163,61 @@ impl Client {
         self.handle(path, request.send_json(body))
     }
 
+    fn put(&self, path: &str, body: &Value) -> Result<Value, GrafanaError> {
+        let mut request = self
+            .agent
+            .put(format!("{}{path}", self.base))
+            .header("Accept", "application/json");
+        if let Some(authorization) = self.authorization() {
+            request = request.header("Authorization", authorization);
+        }
+        self.handle(path, request.send_json(body))
+    }
+
+    /// Creates a datasource, or replaces the one with the same uid.
+    pub fn upsert_datasource(&self, datasource: &Value) -> Result<(), GrafanaError> {
+        let uid = datasource.get("uid").and_then(Value::as_str).unwrap_or("");
+        let path = format!("/api/datasources/uid/{}", encode_path(uid));
+        if self.get(&path).is_ok() {
+            self.put(&path, datasource).map(|_| ())
+        } else {
+            self.post("/api/datasources", datasource).map(|_| ())
+        }
+    }
+
+    /// Replaces a datasource's password, keeping everything else.
+    pub fn set_datasource_password(&self, uid: &str, password: &str) -> Result<(), GrafanaError> {
+        let path = format!("/api/datasources/uid/{}", encode_path(uid));
+        let mut datasource = self.get(&path)?;
+        datasource["secureJsonData"] = json!({"password": password});
+        self.put(&path, &datasource).map(|_| ())
+    }
+
+    /// Grafana's own connection check for a datasource: `Ok` or its message.
+    pub fn datasource_health(&self, uid: &str) -> Result<(), String> {
+        let path = format!("/api/datasources/uid/{}/health", encode_path(uid));
+        match self.get(&path) {
+            Ok(value) if value.get("status").and_then(Value::as_str) == Some("OK") => Ok(()),
+            Ok(value) => Err(value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unhealthy")
+                .to_owned()),
+            Err(GrafanaError::Status { message, .. }) => Err(message),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// `DELETE /api/datasources/uid/<uid>`.
+    pub fn delete_datasource(&self, uid: &str) -> Result<(), GrafanaError> {
+        let path = format!("/api/datasources/uid/{}", encode_path(uid));
+        let mut request = self.agent.delete(format!("{}{path}", self.base));
+        if let Some(authorization) = self.authorization() {
+            request = request.header("Authorization", authorization);
+        }
+        self.handle(&path, request.call()).map(|_| ())
+    }
+
     /// `GET /api/health`: whether the database is up.
     pub fn healthy(&self) -> bool {
         self.get("/api/health")

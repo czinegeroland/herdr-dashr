@@ -6,7 +6,7 @@
 #   scripts/e2e/run.sh [path/to/dashr]
 #
 # Acceptance criteria covered: AC-OPEN, AC-MASK, AC-ALERT, AC-CLOSE,
-# AC-PIPELINE, AC-AGENT, AC-OTEL, AC-LOGX, AC-COLLECT, AC-LIB, plus the startup reaper.
+# AC-PIPELINE, AC-AGENT, AC-OTEL, AC-LOGX, AC-COLLECT, AC-DB, AC-LIB, plus the startup reaper.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -26,7 +26,7 @@ fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
 cleanup() {
   herdr server stop >/dev/null 2>&1 || true
   docker ps -q --filter label=herdr.dashr=1 | xargs -r docker rm -f >/dev/null 2>&1 || true
-  docker rm -f dashr-e2e-orphan dashr-e2e-foreign dashr-e2e-target dashr-e2e-app dashr-e2e-pg >/dev/null 2>&1 || true
+  docker rm -f dashr-e2e-orphan dashr-e2e-foreign dashr-e2e-target dashr-e2e-app dashr-e2e-pg dashr-e2e-dbpg dashr-e2e-mssql >/dev/null 2>&1 || true
   [ -n "${STANDALONE_STATE:-}" ] && "$ROOT/bin/dashr" --state-dir "$STANDALONE_STATE" --config-dir "$STANDALONE_CONFIG" session stop local-image >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
@@ -52,6 +52,7 @@ fi
 herdr --version
 docker pull -q grafana/grafana:12.1.1 >/dev/null
 docker pull -q grafana/otel-lgtm:0.34.0 >/dev/null
+if [ "${DASHR_E2E_MSSQL:-1}" = "1" ] && [ "$(uname -m)" = "x86_64" ]; then docker pull -q mcr.microsoft.com/mssql/server:2022-latest >/dev/null; fi
 mkdir -p "$ROOT/bin"
 install -m 0755 "$DASHR_BUILT" "$ROOT/bin/dashr"
 # The manifest runs `node node_modules/herdr-dashr/bin.js` (DEC-038). A linked
@@ -334,7 +335,7 @@ python3 - "$WORK/example.out" <<'EOF2' || fail "skill resource or example assert
 import json, sys
 lines = [json.loads(l) for l in open(sys.argv[1])]
 uris = json.loads(next(l for l in lines if l["tool"] == "resources/list")["text"])
-assert "dashr://guide/SKILL.md" in uris and len(uris) == 7, uris
+assert "dashr://guide/SKILL.md" in uris and len(uris) == 8, uris
 reads = [l["text"] for l in lines if l["tool"] == "resources/read"]
 assert reads[0].startswith("---\nname: herdr-dashr") and "CloudWatch" in reads[1]
 init = json.loads(next(l for l in lines if l["tool"] == "initialize")["text"])
@@ -708,6 +709,139 @@ collect remove exec:cloud >/dev/null || fail "collect remove failed"
 collect list | grep -q 'exec:cloud' && fail "a removed collector is still listed"
 ok "a collector can be removed"
 docker rm -f dashr-e2e-app dashr-e2e-pg >/dev/null 2>&1 || true
+
+log "AC-DB: database query performance through Grafana, over a tunnel with a password command"
+# A Postgres with pg_stat_statements on the host's loopback only, reached the
+# way an RDS instance is from a laptop: a tunnel command forwards a local
+# port to it and a password command prints the password (an IAM token).
+docker run -d --name dashr-e2e-dbpg -p 127.0.0.1::5432 -e POSTGRES_PASSWORD=e2e-db-secret postgres:16-alpine \
+  -c shared_preload_libraries=pg_stat_statements >/dev/null
+wait_for 60 "docker exec dashr-e2e-dbpg pg_isready -U postgres" || fail "Postgres did not start"
+sleep 2
+DB_PORT="$(docker port dashr-e2e-dbpg 5432/tcp | head -n 1 | cut -d: -f2)"
+docker exec dashr-e2e-dbpg psql -U postgres -qc "CREATE EXTENSION pg_stat_statements; CREATE TABLE orders(id int primary key, note text); CREATE INDEX orders_note ON orders(note); INSERT INTO orders SELECT g, md5(g::text) FROM generate_series(1, 50000) g;" \
+  || fail "could not prepare the database"
+( while docker exec dashr-e2e-dbpg psql -U postgres -qc "SELECT count(*) FROM orders WHERE note LIKE '%ab%'" >/dev/null 2>&1; do sleep 0.3; done ) &
+LOAD_PID=$!
+TUNNEL_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
+cat >"$WORK/tunnel.py" <<'EOF2'
+import socket, sys, threading
+listen, target = int(sys.argv[1]), int(sys.argv[2])
+server = socket.socket(); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", listen)); server.listen(64)
+def pipe(a, b):
+    try:
+        while (data := a.recv(65536)):
+            b.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for s in (a, b):
+            try: s.shutdown(socket.SHUT_RDWR)
+            except OSError: pass
+while True:
+    client, _ = server.accept()
+    upstream = socket.create_connection(("127.0.0.1", target))
+    threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
+    threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
+EOF2
+printf 'e2e-db-secret\n' >"$WORK/dbpass"
+db() { "${AGENT_ENV[@]}" DASHR_SESSION="$OSESSION" "$ROOT/bin/dashr" db "$@"; }
+db add shop --engine postgres --host 127.0.0.1 --port "$TUNNEL_PORT" --user postgres --tls disable \
+  --password-command "cat $WORK/dbpass" --tunnel-command "python3 $WORK/tunnel.py $TUNNEL_PORT $DB_PORT" >"$WORK/db-add.json" \
+  || { cat "$WORK/db-add.json"; fail "dashr db add failed"; }
+python3 - "$WORK/db-add.json" <<'EOF2' || fail "db add did not report the capabilities"
+import json, sys
+out = json.load(open(sys.argv[1]))
+assert out["datasource"] == "db-shop" and out["engine"] == "postgres", out
+assert out["capabilities"]["pg_stat_statements"] is True, out
+assert out["live_series"] is True, out
+assert out["collector"] == "ok", out
+EOF2
+grep -rq 'e2e-db-secret' "$STATE_DIR" "$WORK/db-add.json" && fail "the database password reached a state file or the agent"
+ok "db add connected Grafana through the tunnel with the command's password; only flags came back"
+db dashboard shop >"$WORK/db-board.json" || fail "db dashboard failed"
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool apply_dashboard --session "$OSESSION" --args-file "$WORK/db-board.json" >"$WORK/db-apply.json" \
+  || { cat "$WORK/db-apply.json"; fail "the database dashboard was refused"; }
+"${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool panel_status --session "$OSESSION" >"$WORK/db-status.json" || fail "panel_status failed"
+python3 - "$WORK/db-status.json" <<'EOF2' || { cat "$WORK/db-status.json"; fail "a database table panel fails"; }
+import json, sys
+status = json.load(open(sys.argv[1]))
+tables = [p for p in status["panels"] if p["panel_id"] >= 20]
+assert len(tables) >= 7, tables
+bad = [p for p in tables if p["state"] not in ("ok", "empty")]
+assert not bad, bad
+top = next(p for p in tables if p["panel_id"] == 20)
+assert top["state"] == "ok", top
+EOF2
+ok "every table of the database dashboard (top statements, share, sessions, tables, indexes) queries cleanly"
+for expr in 'dashr_db_transactions_per_second{db="shop"}' 'dashr_db_connections{db="shop"}' \
+  'dashr_db_query_calls_per_second{db="shop"}' 'dashr_db_query_mean_ms{db="shop"}' 'dashr_db_database_time_ms_per_second{db="shop"}'; do
+  wait_for 120 "[ \"\$(probe prometheus '$expr')\" -gt 0 ]" || { db list; fail "no live data for $expr"; }
+done
+db list | python3 -c 'import json,sys; dbs=json.load(sys.stdin); assert dbs[0]["name"] == "shop" and dbs[0]["collector"] == "ok", dbs' \
+  || { db list; fail "db list is wrong"; }
+probe prometheus 'dashr_db_query_calls_per_second{db="shop", query=~".*dashr.*"}' | grep -qx 0 \
+  || fail "dashr's own queries are counted in the statement statistics"
+ok "the pane samples the database: transactions, sessions, per-statement calls and mean time, time share per database"
+kill "$LOAD_PID" 2>/dev/null || true
+db remove shop >/dev/null || fail "db remove failed"
+db list | grep -q '"shop"' && fail "a removed database is still listed"
+wait_for 15 "! pgrep -f 'tunnel.py $TUNNEL_PORT'" || fail "the tunnel command outlived its database"
+ok "db remove disconnects the database and stops its tunnel"
+docker rm -f dashr-e2e-dbpg >/dev/null 2>&1 || true
+
+if [ "${DASHR_E2E_MSSQL:-1}" = "1" ] && [ "$(uname -m)" = "x86_64" ]; then
+  log "AC-DB-MSSQL: SQL Server from a connection string: top statements, waits, counters, a saved plan"
+  MS_PASSWORD='Dashr!E2e-2026'
+  docker run -d --name dashr-e2e-mssql -p 127.0.0.1::1433 -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$MS_PASSWORD" \
+    mcr.microsoft.com/mssql/server:2022-latest >/dev/null
+  sq() { docker exec -i dashr-e2e-mssql /opt/mssql-tools18/bin/sqlcmd -C -I -b -S localhost -U sa -P "$MS_PASSWORD" -W -h -1 "$@"; }
+  wait_for 120 "sq -Q 'SELECT 1'" || fail "SQL Server did not start"
+  MS_PORT="$(docker port dashr-e2e-mssql 1433/tcp | head -n 1 | cut -d: -f2)"
+  sq -Q "CREATE DATABASE shop" >/dev/null
+  sq -d shop -Q "ALTER DATABASE shop SET QUERY_STORE = ON (OPERATION_MODE = READ_WRITE); CREATE TABLE orders(id int primary key, customer int, note nvarchar(64)); INSERT INTO orders SELECT TOP 50000 ROW_NUMBER() OVER (ORDER BY (SELECT 1)), ABS(CHECKSUM(NEWID())) % 1000, CONVERT(nvarchar(64), NEWID()) FROM sys.all_objects a CROSS JOIN sys.all_objects b" >/dev/null \
+    || fail "could not prepare the SQL Server database"
+  ( while sq -d shop -Q "SELECT COUNT(*) FROM orders WHERE note LIKE '%ab%'" >/dev/null 2>&1; do sleep 0.3; done ) &
+  MS_LOAD_PID=$!
+  printf 'Server=tcp:127.0.0.1,%s;Initial Catalog=shop;User ID=sa;Password=%s;Encrypt=True;TrustServerCertificate=True;' "$MS_PORT" "$MS_PASSWORD" \
+    | db add ms --url - >"$WORK/ms-add.json" || { cat "$WORK/ms-add.json"; fail "dashr db add (SQL Server) failed"; }
+  python3 - "$WORK/ms-add.json" <<'EOF2' || fail "db add did not report the SQL Server capabilities"
+import json, sys
+out = json.load(open(sys.argv[1]))
+caps = out["capabilities"]
+assert out["engine"] == "mssql" and caps["plan_cache"] is True and caps["query_store"] == "READ_WRITE", out
+EOF2
+  grep -rq "$MS_PASSWORD" "$STATE_DIR" "$WORK/ms-add.json" && fail "the SQL Server password reached a state file or the agent"
+  ok "db add read an ADO.NET connection string from stdin; the password stayed in Grafana"
+  db dashboard ms | "${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool apply_dashboard --session "$OSESSION" --args-file - >"$WORK/ms-apply.json" \
+    || { cat "$WORK/ms-apply.json"; fail "the SQL Server dashboard was refused"; }
+  "${AGENT_ENV[@]}" "$ROOT/bin/dashr" tool panel_status --session "$OSESSION" >"$WORK/ms-status.json" || fail "panel_status failed"
+  python3 - "$WORK/ms-status.json" <<'EOF2' || { cat "$WORK/ms-status.json"; fail "a SQL Server table panel fails"; }
+import json, sys
+status = json.load(open(sys.argv[1]))
+tables = {p["panel_id"]: p for p in status["panels"] if p["panel_id"] >= 20}
+assert len(tables) >= 9, tables
+bad = [p for p in tables.values() if p["state"] not in ("ok", "empty")]
+assert not bad, bad
+for panel in (20, 23, 24, 25):
+    assert tables[panel]["state"] == "ok", tables[panel]
+EOF2
+  ok "every SQL Server table (top statements by CPU/elapsed/reads, share, waits, file latency, sessions, missing indexes, Query Store) queries cleanly"
+  for expr in 'dashr_db_batch_requests_per_second{db="ms"}' 'dashr_db_page_life_expectancy{db="ms"}' 'dashr_db_buffer_cache_hit_ratio{db="ms"}' \
+    'dashr_db_wait_ms_per_second{db="ms"}' 'dashr_db_query_cpu_ms_per_second{db="ms"}' 'dashr_db_database_cpu_ms_per_second{db="ms"}'; do
+    wait_for 120 "[ \"\$(probe prometheus '$expr')\" -gt 0 ]" || { db list; fail "no live data for $expr"; }
+  done
+  ok "the pane samples SQL Server: batch requests, page life expectancy, cache hit ratio, waits, CPU per statement and per database"
+  HASH="$(sq -d shop -Q "SET NOCOUNT ON; SELECT TOP 1 CONVERT(varchar(18), query_hash, 1) FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st WHERE st.text LIKE '%note LIKE%' AND st.text NOT LIKE '%dm_exec%'" | tr -d '[:space:]')"
+  db plan ms "$HASH" --out "$WORK/top.sqlplan" >"$WORK/ms-plan.json" || { cat "$WORK/ms-plan.json"; fail "db plan failed"; }
+  grep -q 'ShowPlanXML' "$WORK/top.sqlplan" || fail "the saved plan is not a showplan"
+  grep -q 'ShowPlanXML' "$WORK/ms-plan.json" && fail "db plan printed the plan to the agent"
+  ok "db plan saves a statement's cached plan as a .sqlplan file for the human, and prints only its path"
+  kill "$MS_LOAD_PID" 2>/dev/null || true
+  db remove ms >/dev/null || fail "db remove (SQL Server) failed"
+  docker rm -f dashr-e2e-mssql >/dev/null 2>&1 || true
+fi
 
 herdr pane close "$OPANE" >/dev/null
 wait_for 30 "! docker ps --format '{{.Names}}' | grep -q $OCONTAINER" || fail "OpenTelemetry container still running"

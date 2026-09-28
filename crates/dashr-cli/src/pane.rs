@@ -604,8 +604,9 @@ pub fn dashboard(paths: &Paths) -> Result<()> {
         let session_id = record.session_id.clone();
         let stop = Arc::clone(&stop);
         let health = Arc::clone(&health);
+        let grafana = record.grafana_url();
         std::thread::spawn(move || {
-            dashr_runtime::collect::run(exporter, store, session_id, stop, health);
+            dashr_runtime::collect::run(grafana, exporter, store, session_id, stop, health);
         });
     }
     while !stop.load(Ordering::SeqCst) {

@@ -46,6 +46,9 @@ load, live, laid out the way an experienced engineer would.
    `scrape <url>`, and for everything else `exec` (a command printing
    Prometheus text on a schedule) and `stream` (a command printing log
    lines). Each is tried once and reports the metric names it produced.
+   For a database's query performance — PostgreSQL or SQL Server, local or
+   in any cloud, even one reachable only through a CLI tunnel — use `dashr
+   db add` and `dashr db dashboard` (`reference/databases.md`).
 4. **Build** the system dashboard (`reference/collectors.md`, "The system
    dashboard"): a stat row of health, then per service CPU, memory, network
    and disk IO, request rate, error %, p95 latency; a database row when there
@@ -201,7 +204,9 @@ human can see them.
 The same references are available as MCP resources (`dashr://guide/...`) if
 this skill's files are not on disk. Collectors, their metric names and the
 system dashboard are in `reference/collectors.md`; discovering and feeding
-clouds, clusters and remote hosts is in `reference/environments.md`.
+clouds, clusters and remote hosts is in `reference/environments.md`; database
+query performance (top statements, waits, blocking, indexes; RDS through the
+AWS CLI, Azure SQL) is in `reference/databases.md`.
 
 ## OpenTelemetry sessions and log checks
 

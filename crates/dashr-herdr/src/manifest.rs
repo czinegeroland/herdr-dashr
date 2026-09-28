@@ -102,12 +102,23 @@ fn dashr(args: &[&str]) -> Vec<String> {
 /// On Windows `npm` is `npm.cmd`, which `CreateProcess` does not find, so
 /// the step goes through `cmd /c`. The version is pinned to this build's, so
 /// the manifest Herdr read and the executable it installs are one release.
-/// `--no-save` because the plugin root is not a package.
+/// `--no-save` because the plugin root is not a package, and `--prefix .`
+/// for the same reason: without a `package.json` npm walks up to the first
+/// parent that has one (often the home directory) and installs there, where
+/// `node node_modules/herdr-dashr/bin.js` does not look.
 fn npm_install(prefix: &[&str], version: &str) -> Vec<String> {
     prefix
         .iter()
         .copied()
-        .chain(["npm", "install", "--no-save", "--no-audit", "--no-fund"])
+        .chain([
+            "npm",
+            "install",
+            "--prefix",
+            ".",
+            "--no-save",
+            "--no-audit",
+            "--no-fund",
+        ])
         .map(str::to_owned)
         .chain(std::iter::once(format!("{PACKAGE}@{version}")))
         .collect()
@@ -309,6 +320,8 @@ mod tests {
                 "/c",
                 "npm",
                 "install",
+                "--prefix",
+                ".",
                 "--no-save",
                 "--no-audit",
                 "--no-fund",
