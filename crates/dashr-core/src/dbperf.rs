@@ -276,6 +276,11 @@ pub fn datasource_uid(name: &str) -> String {
 
 /// The Grafana datasource for a connection. `host` is rewritten so a
 /// loopback address (a tunnel, a local server) resolves from the container.
+///
+/// No idle connections are kept: the path to the database (a tunnel, the
+/// loopback relay, `db add`'s own while it checks) is replaced now and
+/// then, and SQL Server's driver returns a pooled connection that died with
+/// it as "failed to connect". A new connection per query costs a login.
 pub fn datasource(name: &str, connection: &Connection) -> Value {
     let host = crate::provisioning::container_url(&connection.host);
     let url = format!("{host}:{}", connection.port);
@@ -285,7 +290,7 @@ pub fn datasource(name: &str, connection: &Connection) -> Value {
             "sslmode": connection.tls,
             "postgresVersion": 1500,
             "maxOpenConns": 4,
-            "maxIdleConns": 2,
+            "maxIdleConns": 0,
             "connMaxLifetime": 300
         }),
         Engine::Mssql => json!({
@@ -293,7 +298,7 @@ pub fn datasource(name: &str, connection: &Connection) -> Value {
             "encrypt": connection.tls,
             "tlsSkipVerify": connection.trust_server_certificate,
             "maxOpenConns": 4,
-            "maxIdleConns": 2,
+            "maxIdleConns": 0,
             "connMaxLifetime": 300
         }),
     };
@@ -1474,6 +1479,10 @@ mod tests {
             "a tunnel on the host is reached from the container"
         );
         assert_eq!(ds["secureJsonData"]["password"], "pw");
+        assert_eq!(
+            ds["jsonData"]["maxIdleConns"], 0,
+            "no pooled connection outlives its path"
+        );
         let target = sql_target("orders", Engine::Postgres, "A", "SELECT 1");
         assert_eq!(
             target["rawSql"], "/* dashr */ SELECT 1",
