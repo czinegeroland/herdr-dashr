@@ -155,6 +155,7 @@ impl Drop for Tunnel {
 /// never on the network. Docker Desktop forwards loopback itself.
 pub struct Relay {
     stop: Arc<AtomicBool>,
+    listener: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Relay {
@@ -194,7 +195,7 @@ impl Relay {
             .map_err(|error| error.to_string())?;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
-        std::thread::spawn(move || {
+        let accepting = std::thread::spawn(move || {
             while !flag.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((inbound, _)) => {
@@ -210,13 +211,20 @@ impl Relay {
                 }
             }
         });
-        Ok(Some(Relay { stop }))
+        Ok(Some(Relay {
+            stop,
+            listener: Some(accepting),
+        }))
     }
 }
 
 impl Drop for Relay {
+    /// Returns once the port is free, so the pane can bind it right away.
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(listener) = self.listener.take() {
+            let _ = listener.join();
+        }
     }
 }
 
@@ -513,14 +521,17 @@ pub fn run(
     let every = Duration::from_secs(collector.every_secs());
     let mut refreshed: Option<Instant> = None;
     let mut sampler = DbSampler::new(name, *engine, *statements, *azure);
-    let mut relay: Option<Option<Relay>> = None;
+    // Retried until held: `AddrInUse` may be `db add`'s own relay, which
+    // lingers a moment after it hands over (or the database listens on all
+    // interfaces, and no relay is needed).
+    let mut relay: Option<Relay> = None;
     let running = || !stop.load(Ordering::SeqCst) && !removed.load(Ordering::SeqCst);
     while running() {
         if let Some(port) = relay_port
             && relay.is_none()
         {
             match relay_for("127.0.0.1", *port) {
-                Ok(started) => relay = Some(started),
+                Ok(started) => relay = started,
                 Err(error) => {
                     report(Err(error));
                     sleep(&flags, Duration::from_secs(10));
@@ -598,8 +609,14 @@ mod tests {
         assert_eq!(text(&row, "c"), "");
     }
 
+    /// The tests that bind ports or spawn processes, one at a time: a child
+    /// forked by one holds the other's listening socket until it execs,
+    /// so a rebind right after a drop fails at random.
+    static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn waiting_for_a_port_ends_when_it_opens_or_on_stop() {
+        let _ports = PORTS.lock().unwrap_or_else(|e| e.into_inner());
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let never = AtomicBool::new(false);
@@ -623,8 +640,27 @@ mod tests {
     }
 
     #[cfg(unix)]
+    /// On an address of its own, so no parallel test takes the port.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dropped_relay_frees_its_port_at_once() {
+        let _ports = PORTS.lock().unwrap_or_else(|e| e.into_inner());
+        let port = std::net::TcpListener::bind("127.0.0.2:0")
+            .and_then(|l| l.local_addr())
+            .unwrap()
+            .port();
+        let relay = Relay::start("127.0.0.2", port).unwrap();
+        assert!(relay.is_some());
+        drop(relay);
+        assert!(
+            Relay::start("127.0.0.2", port).unwrap().is_some(),
+            "the next relay binds the same port"
+        );
+    }
+
     #[test]
     fn tunnels_restart_and_stop_with_their_children() {
+        let _ports = PORTS.lock().unwrap_or_else(|e| e.into_inner());
         let mut tunnel = Tunnel::new(&["sh".into(), "-c".into(), "sleep 30 & wait".into()]);
         assert_eq!(tunnel.ensure(), Ok(true));
         assert_eq!(tunnel.ensure(), Ok(false), "a running tunnel is left alone");
