@@ -151,6 +151,7 @@ impl Tunnel {
 
 /// The `kill` operand for the process group led by `pid`; never 0, -1 or
 /// an init's group, which would signal far more than the tunnel.
+#[cfg(unix)]
 fn group_target(pid: u32) -> Option<String> {
     (pid > 1).then(|| format!("-{pid}"))
 }
@@ -671,6 +672,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_a_real_process_group_is_signalled() {
         assert_eq!(group_target(0), None);
