@@ -90,11 +90,10 @@ pub fn last_line(text: &str) -> String {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn runs_with_environment_and_reports_failures() {
         let argv: Vec<String> = ["sh", "-c", "printf %s \"$X\"; echo oops >&2"]

@@ -100,6 +100,16 @@ fn one(row: &BTreeMap<String, Value>, table: &str, source: &str) -> Option<Span>
 
 pub fn parse(document: &Value, source: &str) -> Result<Vec<Span>, String> {
     let mut out = Vec::new();
+    // `az monitor log-analytics query` prints the rows as objects.
+    if let Value::Array(rows) = document {
+        for row in rows {
+            if let Some(object) = row.as_object() {
+                let row: BTreeMap<String, Value> = object.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                out.extend(one(&row, "", source));
+            }
+        }
+        return Ok(out);
+    }
     for table in document
         .get("tables")
         .and_then(Value::as_array)
@@ -163,5 +173,18 @@ mod tests {
         assert_eq!(spans[1].parent_id.as_deref(), Some("00f067aa0ba902b7"));
         assert_eq!(spans[1].peer().as_deref(), Some("stock-api"));
         assert_eq!(spans[1].status, Status::Error);
+    }
+
+    #[test]
+    fn log_analytics_rows() {
+        let spans = parse(
+            &json!([{"Type": "AppRequests", "OperationId": "4bf92f3577b34da6a3ce929d0e0e4736", "Id": "00f067aa0ba902b7",
+                     "ParentId": "4bf92f3577b34da6a3ce929d0e0e4736", "Name": "GET /", "TimeGenerated": "2026-09-28T08:00:00Z",
+                     "DurationMs": 5, "Success": true, "AppRoleName": "web", "Properties": {"k": "v"}}]),
+            "azure",
+        )
+        .unwrap();
+        assert_eq!((spans[0].service.as_str(), spans[0].kind), ("web", SpanKind::Server));
+        assert_eq!(spans[0].attributes["k"], json!("v"));
     }
 }

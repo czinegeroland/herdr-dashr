@@ -104,7 +104,7 @@ fn documents(bytes: &[u8]) -> Result<Vec<Value>, String> {
 /// Recognises a document's format by its shape.
 pub fn detect(document: &Value) -> Option<Format> {
     let has = |key: &str| document.get(key).is_some();
-    if has("resourceSpans") || has("resource_spans") {
+    if has("resourceSpans") || has("resource_spans") || has("batches") {
         return Some(Format::Otlp);
     }
     if has("Traces") || (has("trace_id") && has("id") && has("start_time")) {
@@ -143,6 +143,9 @@ pub fn detect(document: &Value) -> Option<Format> {
     }
     if first.get("trace_id").is_some() && first.get("start_time").is_some() {
         return Some(Format::Xray);
+    }
+    if first.get("OperationId").is_some() || first.get("operation_Id").is_some() {
+        return Some(Format::Appinsights);
     }
     None
 }
@@ -250,6 +253,8 @@ mod tests {
         );
         assert_eq!(detect(&json!({"tables": []})), Some(Format::Appinsights));
         assert_eq!(detect(&json!({"traces": []})), Some(Format::Cloudtrace));
+        assert_eq!(detect(&json!({"batches": []})), Some(Format::Otlp), "Tempo");
+        assert_eq!(detect(&json!([{"OperationId": "a"}])), Some(Format::Appinsights));
         assert_eq!(detect(&json!({"hello": 1})), None);
     }
 

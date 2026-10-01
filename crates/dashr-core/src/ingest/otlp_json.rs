@@ -146,7 +146,12 @@ fn status(value: Option<&Value>) -> (Status, Option<String>) {
 
 pub fn parse(document: &Value, source: &str) -> Result<Vec<Span>, String> {
     let mut out = Vec::new();
-    for resource_spans in list(document, "resourceSpans", "resource_spans") {
+    // Grafana Tempo's `/api/traces/{id}` says `batches`.
+    let groups = match document.get("batches") {
+        Some(Value::Array(batches)) => batches.as_slice(),
+        _ => list(document, "resourceSpans", "resource_spans"),
+    };
+    for resource_spans in groups {
         let resource = resource_spans
             .get("resource")
             .map(|r| attributes(list(r, "attributes", "attributes")))
