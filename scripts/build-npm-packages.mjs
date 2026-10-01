@@ -135,7 +135,7 @@ function main() {
       {
         name: ROOT_PACKAGE,
         version,
-        description: 'End-to-end testing by traces: your AI agent instruments a feature with OpenTelemetry, you review the planned spans, and every service\'s spans (local, AWS X-Ray, Azure, Google Cloud, Jaeger, Zipkin) meet in one live sequence diagram checked against the expected flow.',
+        description: 'End-to-end testing by traces: your AI agent instruments a feature with OpenTelemetry, you browse and edit the code behind every span, and every service\'s spans (local, AWS X-Ray, Azure, Google Cloud, Jaeger, Zipkin) meet in one live sequence diagram checked against the expected flow.',
         license: 'Apache-2.0',
         repository: { type: 'git', url: `git+${REPOSITORY}.git` },
         homepage: REPOSITORY,

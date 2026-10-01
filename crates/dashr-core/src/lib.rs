@@ -3,6 +3,7 @@
 //! diagrams, and the masking that keeps personal data from the agent. No
 //! I/O: the runtime crate feeds it.
 
+pub mod catalog;
 pub mod config;
 pub mod flow;
 pub mod ingest;

@@ -74,8 +74,6 @@ table.kv td.v { font-family: var(--mono); font-size: 12.5px; word-break: break-a
 .wf-bar { position: absolute; top: 1px; height: 12px; border-radius: 3px; min-width: 2px; }
 .wf-dur { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
 .flow-head { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-.review { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
-.review textarea { width: 100%; min-height: 60px; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); margin: 8px 0; }
 .btn { border: 1px solid var(--line); background: var(--panel); padding: 6px 14px; border-radius: 6px; font-weight: 600; }
 .btn.primary { background: var(--ok); border-color: var(--ok); color: #fff; }
 .btn.warn { color: var(--warn); }
@@ -88,6 +86,25 @@ table.steps td.mono, .mono { font-family: var(--mono); font-size: 12px; }
 .v-pass { background: var(--ok-soft); color: var(--ok); } .v-fail { background: var(--bad-soft); color: var(--bad); }
 .v-wait { background: var(--bg); color: var(--muted); border: 1px dashed var(--line); } .v-run { background: var(--warn-soft); color: var(--warn); }
 .hint { color: var(--muted); font-size: 13px; }
+.spans { display: grid; grid-template-columns: minmax(260px, 30%) 1fr; gap: 14px; height: calc(100vh - 140px); min-height: 420px; }
+.span-list { overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.span-list h5 { margin: 0; padding: 8px 12px 4px; font-size: 12px; display: flex; align-items: center; gap: 6px; position: sticky; top: 0; background: var(--panel); }
+.span-row { padding: 6px 12px 6px 22px; cursor: pointer; border-left: 3px solid transparent; font-size: 13px; }
+.span-row:hover { background: var(--bg); } .span-row.sel { background: var(--accent-soft); border-left-color: var(--accent); }
+.span-row .n { display: flex; justify-content: space-between; gap: 6px; } .span-row .n span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.span-row .c { font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.span-row.nocode .c { font-style: italic; }
+.code { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-width: 0; overflow: hidden; }
+.code-bar { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; font-size: 13px; }
+.code-bar .path { font-family: var(--mono); font-size: 12.5px; font-weight: 600; flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-bar a { color: var(--accent); }
+.code-info { padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; max-height: 30%; overflow: auto; }
+.code-info .kvs { font-family: var(--mono); font-size: 11.5px; color: var(--muted); word-break: break-all; }
+.span-line { background: rgba(47, 91, 211, .14); }
+#editor { flex: 1; min-height: 240px; position: relative; }
+#editor textarea { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; resize: none; padding: 10px 12px; font: 13px/1.5 var(--mono); background: var(--panel); color: var(--ink); tab-size: 4; outline: none; white-space: pre; }
+.btn:disabled { opacity: .5; cursor: default; }
+@media (max-width: 960px) { .spans { grid-template-columns: 1fr; height: auto; } .code { height: 70vh; } }
 @media (max-width: 760px) { main { grid-template-columns: 1fr; height: auto; } aside { max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); } }
 </style>
 </head>
@@ -107,6 +124,7 @@ table.steps td.mono, .mono { font-family: var(--mono); font-size: 12px; }
       <button data-tab="sequence" class="on">Sequence</button>
       <button data-tab="waterfall">Waterfall</button>
       <button data-tab="flow">Flow</button>
+      <button data-tab="spans">Spans</button>
       <span class="spacer"></span>
       <label><input type="checkbox" id="internal" checked> internal spans</label>
       <label><input type="checkbox" id="follow" checked> follow newest</label>
@@ -125,7 +143,8 @@ const ms = (v) => v == null ? "" : v >= 1000 ? (v / 1000).toFixed(2) + " s" : v 
 const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000); return s < 60 ? Math.round(s) + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : Math.round(s / 3600) + "h ago"; };
 
 let state = null, tab = "sequence", selectedTrace = null, selectedFlow = null, selectedSpan = null;
-let trace = null, traceKey = "", lastVersion = -1, comment = {};
+let trace = null, traceKey = "", lastVersion = -1;
+let spans = [], spansVersion = -1, selectedKey = null, file = null, editor = null, monacoState = "idle", dirty = false, opening = null, fileChecked = -1;
 
 async function api(method, path, body) {
   const response = await fetch(path, { method, headers: { "x-dashr-viewer": TOKEN, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -145,32 +164,32 @@ function header() {
   for (const code of $("meta").querySelectorAll("code")) code.onclick = () => navigator.clipboard?.writeText(code.textContent);
 }
 
-function verdictBadge(v, review) {
-  if (review === "pending") return `<span class="badge b-warn">review</span>`;
-  if (review === "changes_requested") return `<span class="badge b-warn">changes</span>`;
+function verdictBadge(v) {
   return { pass: `<span class="badge b-ok">pass</span>`, fail: `<span class="badge b-bad">fail</span>`, running: `<span class="badge b-warn">running</span>` }[v.status] || `<span class="badge b-mute">waiting</span>`;
 }
 
 function sidebar() {
   $("flows").innerHTML = state.flows.length ? state.flows.map((f) =>
     `<div class="item ${selectedFlow === f.flow.name && tab === "flow" ? "sel" : ""}" data-flow="${esc(f.flow.name)}">
-      <div class="t"><span>${esc(f.flow.name)}</span>${verdictBadge(f.verdict, f.review.state)}</div>
-      <div class="s">${esc(f.verdict.summary)}</div></div>`).join("") : `<div class="empty">No flow yet. The agent writes one for you to review.</div>`;
+      <div class="t"><span>${esc(f.flow.name)}</span>${verdictBadge(f.verdict)}</div>
+      <div class="s">${esc(f.verdict.summary)}</div></div>`).join("") : `<div class="empty">No flow yet. The agent writes the trace your feature should produce.</div>`;
   $("sources").innerHTML = state.sources.length ? state.sources.map((s) => {
     const h = s.health, failing = h.last_error && h.last_ok_ms !== h.last_run_ms;
     return `<div class="item"><div class="t"><span>${esc(s.spec.name)}</span><span class="badge ${failing ? "b-bad" : "b-ok"}">${esc(s.spec.format)}</span></div>
       <div class="s">${failing ? esc(h.last_error) : `${h.spans_total} spans · every ${s.spec.every_secs}s · ${h.last_ok_ms ? ago(h.last_ok_ms) : "never"}`}</div></div>`;
   }).join("") : `<div class="empty">Local services export straight to Jaeger. Remote ones (X-Ray, Azure, …) arrive through sources.</div>`;
   $("traces").innerHTML = state.traces.length ? state.traces.map((t) =>
-    `<div class="item ${t.trace_id === selectedTrace && tab !== "flow" ? "sel" : ""}" data-trace="${t.trace_id}">
+    `<div class="item ${t.trace_id === selectedTrace && tab !== "flow" && tab !== "spans" ? "sel" : ""}" data-trace="${t.trace_id}">
       <div class="t"><span>${esc(t.root || "(no root yet)")}</span>${t.errors ? `<span class="badge b-bad">${t.errors} err</span>` : ""}</div>
       <div class="s">${ms(t.duration_ms)} · ${t.spans} spans${t.orphans ? ` · <span style="color:var(--warn)">${t.orphans} orphaned</span>` : ""} · ${ago(t.start_ns / 1e6)}</div>
       <div class="chips">${t.services.map((s) => `<span class="chip" style="background:${colour(s)}">${esc(s)}</span>`).join("")}</div></div>`).join("") : `<div class="empty">No traces yet.</div>`;
   for (const el of document.querySelectorAll("[data-flow]")) el.onclick = () => { selectedFlow = el.dataset.flow; setTab("flow"); };
-  for (const el of document.querySelectorAll("[data-trace]")) el.onclick = () => { selectedTrace = el.dataset.trace; $("follow").checked = false; selectedSpan = null; if (tab === "flow") tab = "sequence"; setTab(tab); };
+  for (const el of document.querySelectorAll("[data-trace]")) el.onclick = () => { selectedTrace = el.dataset.trace; $("follow").checked = false; selectedSpan = null; if (tab === "flow" || tab === "spans") tab = "sequence"; setTab(tab); };
 }
 
 function setTab(name) {
+  if (tab === "spans" && name !== "spans" && dirty && !confirm(`Discard your unsaved changes to ${file.path}?`)) return;
+  if (name !== "spans") { dirty = false; file = null; }
   tab = name;
   for (const b of $("tabs").querySelectorAll("button")) b.classList.toggle("on", b.dataset.tab === name);
   sidebar();
@@ -178,6 +197,7 @@ function setTab(name) {
 }
 
 async function loadTrace(force) {
+  if (tab === "spans") return loadSpans(force);
   if (tab === "flow") return render();
   if (!selectedTrace) return render();
   const summary = state.traces.find((t) => t.trace_id === selectedTrace);
@@ -262,7 +282,8 @@ function spanDetails() {
   if (!s) return `<div class="details hint">Click an arrow or a bar for the span's attributes.</div>`;
   const rows = [["service", s.service], ["kind", s.kind], ["duration", ms((s.end_ns - s.start_ns) / 1e6)], ["status", s.status + (s.status_message ? ": " + s.status_message : "")], ["source", s.source], ["span id", s.span_id], ["parent", s.parent_id || "—"]];
   const attrs = Object.entries(s.attributes || {}), res = Object.entries(s.resource || {});
-  return `<div class="details"><h4>${esc(s.name)}</h4><table class="kv">${rows.map(([k, v]) => `<tr><td>${k}</td><td class="v">${esc(v)}</td></tr>`).join("")}
+  const known = spans.find((x) => x.service === s.service && x.span === s.name && x.code);
+  return `<div class="details"><h4>${esc(s.name)}${known ? ` <a href="#" id="open-code" style="font-size:12.5px;font-weight:400">open code ↗</a>` : ""}</h4><table class="kv">${rows.map(([k, v]) => `<tr><td>${k}</td><td class="v">${esc(v)}</td></tr>`).join("")}
     ${attrs.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="v">${esc(typeof v === "string" ? v : JSON.stringify(v))}</td></tr>`).join("")}
     ${(s.events || []).map((ev) => `<tr><td>event</td><td class="v">${esc(ev.name)} ${esc(JSON.stringify(ev.attributes || {}))}</td></tr>`).join("")}
     ${res.length ? `<tr><td>resource</td><td class="v">${esc(res.map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("  "))}</td></tr>` : ""}</table></div>`;
@@ -285,38 +306,210 @@ function waterfall() {
 
 function flowView() {
   const f = state.flows.find((x) => x.flow.name === selectedFlow) || state.flows[0];
-  if (!f) return `<p class="hint">No flow yet. The agent writes the flow it expects your feature to produce — services, spans, attributes, where in the code each span is made — and it appears here for you to review.</p>`;
+  if (!f) return `<p class="hint">No flow yet. The agent writes the flow it expects your feature to produce — services, spans, attributes, where in the code each span is made — and every run is checked against it here.</p>`;
   selectedFlow = f.flow.name;
-  const v = f.verdict, r = f.review;
+  const v = f.verdict;
   const byId = Object.fromEntries(v.steps.map((s) => [s.id, s]));
   const cls = { pass: "v-pass", fail: "v-fail", running: "v-run" }[v.status] || "v-wait";
   const head = { pass: "✓ Passed", fail: "✗ Failed", running: "… Trace arriving" }[v.status] || "○ Waiting for a run";
   const expect = (a) => Object.entries(a || {}).map(([k, e]) => `${esc(k)} ${e === "*" ? "present" : e === "!" ? "<b>absent</b>" : typeof e === "string" && e.startsWith("re:") ? "~ " + esc(e.slice(3)) : "= " + esc(JSON.stringify(e))}`).join("<br>");
   const status = (s) => !s ? "" : s.status === "ok" ? `<span class="badge b-ok">ok</span>` : s.status === "skipped" ? `<span class="badge b-mute">skipped</span>` : `<span class="badge ${s.status === "missing" && v.status !== "fail" ? "b-mute" : "b-bad"}">${esc(s.status.replace(/_/g, " "))}</span>`;
-  return `<div class="flow-head"><div class="title"><h3>${esc(f.flow.name)}</h3><span class="s">${esc(f.flow.description || "")}</span></div></div>
-    <div class="review"><b>Review:</b> ${r.state === "pending" ? `<span class="badge b-warn">waiting for you</span> Check that each span is in the right place and carries the right data before the test runs.` : r.state === "approved" ? `<span class="badge b-ok">approved</span>` : `<span class="badge b-warn">changes requested</span>`}
-      ${r.comment ? `<div class="hint">“${esc(r.comment)}”</div>` : ""}
-      <textarea id="comment" placeholder="Comment for the agent (what to change, where)">${esc(comment[f.flow.name] || "")}</textarea>
-      <button class="btn primary" id="approve">Approve</button> <button class="btn warn" id="changes">Request changes</button>
-      <button class="btn" id="arm" title="Count only runs from now on">Re-arm</button></div>
+  return `<div class="flow-head"><div class="title"><h3>${esc(f.flow.name)}</h3><span class="s">${esc(f.flow.description || "")}</span></div>
+      <button class="btn" id="arm" title="Forget earlier runs: count only runs from now on">Re-arm</button></div>
     <div class="verdict ${cls}">${head} — ${esc(v.summary)}${v.trace_id ? ` · <a href="#" id="open-trace">open trace</a>` : ""}</div>
     <table class="steps"><tr><th>#</th><th>Service</th><th>Span</th><th>Expected attributes</th><th>Code</th><th>Status</th></tr>
     ${f.flow.steps.map((s) => { const res = byId[s.id]; return `<tr><td class="mono">${esc(s.id)}</td><td><span style="color:${colour(s.service)}">●</span> ${esc(s.service)}</td>
       <td>${esc(s.span)}${s.kind ? ` <span class="hint">${esc(s.kind)}</span>` : ""}${s.optional ? ` <span class="badge b-mute">optional</span>` : ""}${s.error ? ` <span class="badge b-warn">expects error</span>` : ""}${s.why ? `<div class="hint">${esc(s.why)}</div>` : ""}</td>
       <td class="mono">${expect(s.attributes)}${s.max_ms ? `<br>≤ ${s.max_ms} ms` : ""}${s.count ? `<br>count ${s.count.min ?? 0}..${s.count.max ?? "∞"}` : ""}</td>
-      <td class="mono">${esc(s.code || "")}</td><td>${status(res)}${res && res.duration_ms != null ? ` <span class="hint">${ms(res.duration_ms)}</span>` : ""}${res && res.problems && res.problems.length ? `<div class="problems">${res.problems.map(esc).join("<br>")}</div>` : ""}</td></tr>`; }).join("")}</table>
+      <td class="mono">${s.code ? `<a href="#" data-code-step="${esc(s.service)}\n${esc(s.span)}">${esc(s.code)}</a>` : ""}</td><td>${status(res)}${res && res.duration_ms != null ? ` <span class="hint">${ms(res.duration_ms)}</span>` : ""}${res && res.problems && res.problems.length ? `<div class="problems">${res.problems.map(esc).join("<br>")}</div>` : ""}</td></tr>`; }).join("")}</table>
     ${(v.unexpected_errors || []).length ? `<div class="details"><h4>Unexpected errors</h4>${v.unexpected_errors.map((e) => `<div class="problems">${esc(e.service)} · ${esc(e.span)}: ${esc(e.message)}</div>`).join("")}</div>` : ""}
     ${(v.forbidden || []).length ? `<div class="details"><h4>Forbidden spans</h4>${v.forbidden.map((e) => `<div class="problems">${esc(e.service)} · ${esc(e.span)}</div>`).join("")}</div>` : ""}`;
 }
 
+// ------------------------------------------------------------ spans
+
+const keyOf = (s) => s.service + "\n" + s.span;
+
+async function loadSpans(force) {
+  if (force || state.version !== spansVersion) {
+    try { spans = await api("GET", "/v/spans"); spansVersion = state.version; } catch { spans = []; }
+  }
+  if (tab === "spans") render();
+}
+
+function openSpan(service, span) {
+  selectedKey = service + "\n" + span;
+  setTab("spans");
+}
+
+function spanList() {
+  if (!spans.length) return `<div class="empty" style="padding:14px">No spans yet. The agent lists the spans it added with <span class="mono">dashr spans set</span>; spans from runs appear here as they arrive.</div>`;
+  let html = "", service = null;
+  for (const s of spans) {
+    if (s.service !== service) { service = s.service; html += `<h5><span style="color:${colour(service)}">●</span>${esc(service)}</h5>`; }
+    const where = s.code ? s.code.file.split(/[\\/]/).pop() + (s.code.line ? ":" + s.code.line : "") + (s.code.function ? " · " + s.code.function : "") : "no code location";
+    const badge = s.errors ? `<span class="badge b-bad">${s.errors} err</span>` : s.seen ? `<span class="badge b-ok" title="seen in the traces">${s.seen}×</span>` : `<span class="badge b-mute" title="planned, not seen in a run yet">not seen</span>`;
+    html += `<div class="span-row ${keyOf(s) === selectedKey ? "sel" : ""} ${s.code ? "" : "nocode"}" data-key="${esc(keyOf(s))}">
+      <div class="n"><span title="${esc(s.span)}">${esc(s.span)}</span>${badge}</div><div class="c" title="${esc(s.code ? s.code.file : "")}">${esc(where)}</div></div>`;
+  }
+  return html;
+}
+
+function spanInfo(s) {
+  if (!s) return "";
+  const attrs = Object.entries(s.last_attributes || {});
+  const expected = (s.expected_attributes || []).filter((k) => !(k in (s.last_attributes || {})));
+  return `${s.why ? `<div>${esc(s.why)}</div>` : ""}
+    <div class="hint">${s.planned ? "planned by the agent" : "seen in a run"}${s.located_by ? ` · located by ${esc(s.located_by)}` : ""}${s.seen ? ` · seen ${s.seen}× · last ${ms(s.last_duration_ms)}` : " · not seen in a run yet"}${s.last_trace_id ? ` · <a href="#" id="span-trace">last trace</a>` : ""}</div>
+    ${attrs.length ? `<div class="kvs">${attrs.map(([k, v]) => `${esc(k)}=${esc(typeof v === "string" ? v : JSON.stringify(v))}`).join(" · ")}</div>` : ""}
+    ${expected.length ? `<div class="kvs" style="color:var(--warn)">expected, not seen: ${expected.map(esc).join(", ")}</div>` : ""}`;
+}
+
+function spansView() {
+  const pane = $("pane");
+  if (!$("span-list")) {
+    pane.innerHTML = `<div class="spans"><div class="span-list" id="span-list"></div>
+      <div class="code"><div class="code-bar"><span class="path" id="code-path">Pick a span to see the code that makes it.</span>
+        <span class="hint" id="code-state"></span><a id="code-vscode" href="#" hidden>Open in VS Code ↗</a>
+        <button class="btn primary" id="code-save" disabled title="Ctrl+S">Save</button></div>
+        <div class="code-info" id="code-info" hidden></div><div id="editor"></div></div></div>`;
+    $("code-save").onclick = save;
+    file = null;
+    if (editor && editor.dispose) editor.dispose();
+    editor = null;
+  }
+  const list = $("span-list"), scroll = list.scrollTop;
+  list.innerHTML = spanList();
+  list.scrollTop = scroll;
+  for (const el of list.querySelectorAll("[data-key]")) el.onclick = () => { selectedKey = el.dataset.key; spansView(); };
+  const s = spans.find((x) => keyOf(x) === selectedKey);
+  const info = $("code-info");
+  info.hidden = !s; info.innerHTML = spanInfo(s);
+  const lt = $("span-trace"); if (lt) lt.onclick = (e) => { e.preventDefault(); selectedTrace = s.last_trace_id; selectedSpan = s.last_span_id; $("follow").checked = false; setTab("sequence"); };
+  if (s && s.code && opening !== selectedKey && (!file || file.key !== selectedKey)) openFile(s);
+  else if (file && !dirty && opening === null && fileChecked !== state.version) refreshFile();
+  if (s && !s.code) { $("code-path").textContent = `${s.span}: no code location`; showMessage(state.code_root ? "The agent did not say where this span is made. It adds the file and function with `dashr spans set`; spans with code.* attributes are located automatically." : "No code root yet: the agent sets it with `dashr spans set` from the repository."); }
+}
+
+function showMessage(text) {
+  file = null; dirty = false;
+  if (editor && editor.dispose) editor.dispose();
+  editor = null;
+  $("editor").innerHTML = `<p class="hint" style="padding:12px">${esc(text)}</p>`;
+  $("code-save").disabled = true; $("code-vscode").hidden = true; $("code-state").textContent = "";
+}
+
+async function openFile(s) {
+  if (dirty && !confirm(`Discard your unsaved changes to ${file.path}?`)) { selectedKey = file.key; spansView(); return; }
+  const key = selectedKey;
+  opening = key;
+  let loaded;
+  try { loaded = await api("GET", "/v/code?path=" + encodeURIComponent(s.code.file)); }
+  catch (error) { opening = null; if (key === selectedKey) { $("code-path").textContent = s.code.file; showMessage(String(error.message || error)); file = { key, requested: s.code.file, failed: true }; } return; }
+  opening = null;
+  fileChecked = state.version;
+  if (key !== selectedKey) return;
+  file = { ...loaded, requested: s.code.file, key, line: s.code.line || 1 };
+  dirty = false;
+  $("code-path").textContent = file.path; $("code-path").title = file.absolute;
+  const vs = $("code-vscode"); vs.hidden = false;
+  vs.href = "vscode://file/" + file.absolute.replace(/\\/g, "/").replace(/^\/?/, "/").replace(/^\/([A-Za-z]:)/, "$1") + ":" + file.line;
+  $("code-state").textContent = "";
+  $("code-save").disabled = true;
+  await showEditor();
+}
+
+const MONACO = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min";
+function loadMonaco() {
+  if (monacoState !== "idle") return;
+  monacoState = "loading";
+  window.MonacoEnvironment = { getWorkerUrl: () => "data:text/javascript;charset=utf-8," + encodeURIComponent(`self.MonacoEnvironment={baseUrl:"${MONACO}/"};importScripts("${MONACO}/vs/base/worker/workerMain.js");`) };
+  const script = document.createElement("script");
+  script.src = MONACO + "/vs/loader.js";
+  script.onload = () => { window.require.config({ paths: { vs: MONACO + "/vs" } }); window.require(["vs/editor/editor.main"], () => { monacoState = "ready"; if (file) showEditor(); }, () => { monacoState = "failed"; if (file) showEditor(); }); };
+  script.onerror = () => { monacoState = "failed"; if (file) showEditor(); };
+  document.head.appendChild(script);
+  setTimeout(() => { if (monacoState === "loading") { monacoState = "failed"; if (file) showEditor(); } }, 8000);
+}
+
+function markDirty() {
+  if (!file) return;
+  dirty = editorText() !== file.content;
+  $("code-save").disabled = !dirty;
+  $("code-state").textContent = dirty ? "● modified" : "";
+}
+
+function editorText() { return editor ? (editor.getValue ? editor.getValue() : editor.value) : ""; }
+
+async function showEditor() {
+  if (!file) return;
+  if (monacoState === "idle" || monacoState === "loading") { loadMonaco(); if (monacoState === "loading" && !editor) $("editor").innerHTML = `<p class="hint" style="padding:12px">Loading the editor…</p>`; if (monacoState === "loading") return; }
+  const host = $("editor");
+  if (editor && editor.dispose) editor.dispose();
+  host.innerHTML = "";
+  if (monacoState === "ready") {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    editor = monaco.editor.create(host, { value: file.content, language: file.language, theme: dark ? "vs-dark" : "vs", automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false });
+    editor.revealLineInCenter(file.line);
+    editor.setPosition({ lineNumber: file.line, column: 1 });
+    editor.createDecorationsCollection([{ range: new monaco.Range(file.line, 1, file.line, 1), options: { isWholeLine: true, className: "span-line", hoverMessage: { value: "the span is made here" } } }]);
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, save);
+    editor.onDidChangeModelContent(markDirty);
+    editor.focus();
+  } else {
+    // The CDN is out of reach: a plain editor still edits and saves.
+    const area = document.createElement("textarea");
+    area.spellcheck = false; area.value = file.content; area.id = "code-text";
+    host.appendChild(area);
+    editor = area;
+    area.oninput = markDirty;
+    const before = file.content.split("\n").slice(0, file.line - 1).join("\n").length + (file.line > 1 ? 1 : 0);
+    area.focus(); area.setSelectionRange(before, before);
+    area.scrollTop = Math.max(0, (file.line - 8) * 19.5);
+  }
+}
+
+// The agent edits code too: show its changes while you have none.
+async function refreshFile() {
+  fileChecked = state.version;
+  if (file.failed) return;
+  try {
+    const loaded = await api("GET", "/v/code?path=" + encodeURIComponent(file.requested));
+    if (!file || dirty || loaded.version === file.version) return;
+    file.content = loaded.content; file.version = loaded.version;
+    if (editor && editor.getModel) { const view = editor.saveViewState(); editor.setValue(loaded.content); editor.restoreViewState(view); }
+    else if (editor) { const top = editor.scrollTop; editor.value = loaded.content; editor.scrollTop = top; }
+    markDirty();
+    $("code-state").textContent = "reloaded: changed on disk";
+  } catch { /* gone or moved: keep what is shown */ }
+}
+
+let saving = false;
+async function save() {
+  if (!file || !dirty || saving) return;
+  const content = editorText();
+  saving = true;
+  try {
+    const result = await api("PUT", "/v/code", { path: file.requested, content, version: file.version });
+    file.content = content; file.version = result.version;
+    markDirty();
+    $("code-state").textContent = `saved · ${result.lines_changed} line${result.lines_changed === 1 ? "" : "s"} changed`;
+  } catch (error) {
+    $("code-state").textContent = "⚠ " + (error.message || error);
+  } finally { saving = false; }
+}
+
+addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "s" && tab === "spans") { e.preventDefault(); save(); } });
+addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+
 function render() {
   const pane = $("pane");
+  if (tab === "spans") return spansView();
   if (tab === "flow") {
     pane.innerHTML = flowView();
     const f = selectedFlow;
-    const c = $("comment"); if (c) c.oninput = () => (comment[f] = c.value);
-    const send = (decision) => api("POST", `/v/flows/${encodeURIComponent(f)}/review`, { decision, comment: comment[f] || "" }).then(() => { comment[f] = ""; poll(true); });
-    if ($("approve")) { $("approve").onclick = () => send("approve"); $("changes").onclick = () => send("changes"); $("arm").onclick = () => api("POST", `/v/flows/${encodeURIComponent(f)}/arm`).then(() => poll(true)); }
+    if ($("arm")) $("arm").onclick = () => api("POST", `/v/flows/${encodeURIComponent(f)}/arm`).then(() => poll(true));
+    for (const a of pane.querySelectorAll("[data-code-step]")) a.onclick = (e) => { e.preventDefault(); const [service, span] = a.dataset.codeStep.split("\n"); openSpan(service, span); };
     const open = $("open-trace"); if (open) open.onclick = (e) => { e.preventDefault(); selectedTrace = state.flows.find((x) => x.flow.name === f).verdict.trace_id; $("follow").checked = false; setTab("sequence"); };
     return;
   }
@@ -325,6 +518,7 @@ function render() {
   const title = `<div class="title"><h3>${esc(s.root || s.trace_id)}</h3><span class="s">${ms(s.duration_ms)} · ${s.spans} spans · ${s.services.length} services${s.errors ? ` · <b style="color:var(--bad)">${s.errors} errors</b>` : ""}${s.orphans ? ` · <b style="color:var(--warn)">${s.orphans} spans lost their parent (broken propagation?)</b>` : ""} · <span class="mono">${s.trace_id}</span> · <a href="${esc(state.info.jaeger_ui)}/trace/${s.trace_id}" target="_blank" rel="noopener">Jaeger ↗</a></span></div>`;
   pane.innerHTML = title + (tab === "sequence" ? `<div class="seq-wrap">${sequenceSvg()}</div>` : waterfall()) + spanDetails();
   for (const el of pane.querySelectorAll("[data-span]")) el.onclick = () => { selectedSpan = el.dataset.span; render(); };
+  const oc = $("open-code"); if (oc) oc.onclick = (e) => { e.preventDefault(); const sp = trace.spans.find((x) => x.span_id === selectedSpan); openSpan(sp.service, sp.name); };
 }
 
 async function poll(force) {
@@ -343,9 +537,9 @@ async function poll(force) {
   if (!selectedTrace && state.traces.length) selectedTrace = state.traces[0].trace_id;
   if (force || state.version !== lastVersion) {
     lastVersion = state.version;
-    const typing = document.activeElement && document.activeElement.id === "comment";
     sidebar();
-    if (!typing) await loadTrace(force);
+    await loadTrace(force);
+    if (tab !== "spans" && state.version !== spansVersion) loadSpans(false);
   }
 }
 

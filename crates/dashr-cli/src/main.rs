@@ -2,8 +2,8 @@
 //!
 //! A session (a Herdr pane, or `dashr serve`) runs Jaeger and a live
 //! viewer. The human's AI session instruments a feature with OpenTelemetry,
-//! writes the flow the feature should produce for the human to review,
-//! connects the traces of every service it runs on, and checks the run
+//! lists the spans it added and where (the human reads and edits that code
+//! in the viewer), writes the flow the feature should produce, connects the traces of every service it runs on, and checks the run
 //! against the flow — all through these commands.
 
 mod agent;
@@ -85,7 +85,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Flows: the trace a feature should produce, reviewed by the human, checked against runs.
+    /// Every span the code has, planned and observed (masked); `set` the catalog.
+    Spans {
+        #[command(subcommand)]
+        command: Option<SpansCommand>,
+    },
+    /// Flows: the trace a feature should produce, checked against runs.
     Flow {
         #[command(subcommand)]
         command: FlowCommand,
@@ -123,27 +128,35 @@ enum Command {
 
 #[derive(Subcommand)]
 enum FlowCommand {
-    /// Add or replace a flow from a JSON file (`-` for stdin); a changed flow needs review again.
+    /// Add or replace a flow from a JSON file (`-` for stdin); a changed flow counts runs from now.
     Set {
         #[arg(default_value = "-")]
         file: PathBuf,
     },
-    /// Every flow with its review and status.
+    /// Every flow with its status.
     List,
-    /// A flow, its review and its verdict (masked).
+    /// A flow and its verdict (masked).
     Show { name: String },
     /// Count only runs from now on.
     Arm { name: String },
-    /// Wait for the human's review (--review) or for the verdict.
+    /// Wait for the verdict: exit 0 passed, 1 failed, 4 timed out.
     Wait {
         name: String,
-        #[arg(long)]
-        review: bool,
         #[arg(long, default_value_t = 600)]
         timeout: u64,
     },
     /// Remove a flow.
     Rm { name: String },
+}
+
+#[derive(Subcommand)]
+enum SpansCommand {
+    /// Set the span catalog from a JSON file (`-` for stdin): every span you
+    /// added, with its file and function, so the human can open its code.
+    Set {
+        #[arg(default_value = "-")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -278,16 +291,18 @@ fn run(cli: Cli) -> agent::Outcome {
             limit,
         } => agent::traces(&paths, session, since, service, name, attrs, errors, limit),
         Command::Trace { id, json } => agent::trace(&paths, session, &id, json),
+        Command::Spans { command } => match command {
+            Some(SpansCommand::Set { file }) => agent::spans_set(&paths, session, &file),
+            None => agent::spans_list(&paths, session),
+        },
         Command::Flow { command } => match command {
             FlowCommand::Set { file } => agent::flow_set(&paths, session, &file),
             FlowCommand::List => agent::flow_list(&paths, session),
             FlowCommand::Show { name } => agent::flow_show(&paths, session, &name),
             FlowCommand::Arm { name } => agent::flow_arm(&paths, session, &name),
-            FlowCommand::Wait {
-                name,
-                review,
-                timeout,
-            } => agent::flow_wait(&paths, session, &name, review, timeout),
+            FlowCommand::Wait { name, timeout } => {
+                agent::flow_wait(&paths, session, &name, timeout)
+            }
             FlowCommand::Rm { name } => agent::flow_remove(&paths, session, &name),
         },
         Command::Source { command } => match command {

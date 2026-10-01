@@ -11,9 +11,11 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use dashr_core::Flow;
+use dashr_core::catalog::Catalog;
 use dashr_core::ingest::Format;
 use dashr_core::store::Filter;
 
+use crate::code;
 use crate::http::{Handler, Request, Response};
 use crate::session::now_ms;
 use crate::state::{Shared, SourceSpec};
@@ -121,8 +123,9 @@ fn agent(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
         }
         ("PUT", ["flows", name]) => {
             let text = String::from_utf8_lossy(&request.body);
+            let cwd = request.query.get("cwd").map(String::as_str);
             match Flow::parse(&text) {
-                Ok(flow) if flow.name == *name => Response::json(200, &shared.set_flow(flow)),
+                Ok(flow) if flow.name == *name => Response::json(200, &shared.set_flow(flow, cwd)),
                 Ok(flow) => Response::error(
                     400,
                     &format!("the flow is named {:?}, not {name:?}", flow.name),
@@ -143,6 +146,15 @@ fn agent(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
                 Response::json(200, &json!({"removed": name}))
             } else {
                 Response::error(404, &format!("no flow {name:?}"))
+            }
+        }
+        ("GET", ["spans"]) => Response::json(200, &shared.spans_for_agent()),
+        ("PUT", ["catalog"]) => {
+            let text = String::from_utf8_lossy(&request.body);
+            let cwd = request.query.get("cwd").map(String::as_str);
+            match Catalog::parse(&text).and_then(|c| shared.set_catalog(c, cwd)) {
+                Ok(result) => Response::json(200, &result),
+                Err(error) => Response::error(422, &error),
             }
         }
         ("GET", ["sources"]) => Response::json(200, &shared.sources_view()),
@@ -200,22 +212,38 @@ fn viewer(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
             Some(trace) => Response::json(200, &trace),
             None => Response::error(404, "no such trace"),
         },
-        ("POST", ["flows", name, "review"]) => {
+        ("GET", ["spans"]) => Response::json(200, &shared.spans_for_viewer()),
+        ("GET", ["code"]) => {
+            let path = request.query.get("path").map(String::as_str).unwrap_or("");
+            match code::read(shared.code_root().as_deref(), path) {
+                Ok(file) => Response::json(200, &serde_json::to_value(file).unwrap_or_default()),
+                Err(error) => Response::error(error.status(), &error.message()),
+            }
+        }
+        ("PUT", ["code"]) => {
             let body = match body_json(request) {
                 Ok(body) => body,
                 Err(response) => return response,
             };
-            let decision = body
-                .get("decision")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let comment = body
-                .get("comment")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            match shared.review(name, decision, comment) {
-                Ok(()) => Response::json(200, &json!({"reviewed": name})),
-                Err(error) => Response::error(400, &error),
+            let text = |key: &str| body.get(key).and_then(Value::as_str).unwrap_or("");
+            match code::write(
+                shared.code_root().as_deref(),
+                text("path"),
+                text("content"),
+                text("version"),
+            ) {
+                Ok((path, version, lines_changed)) => {
+                    shared.record_edit(&path, lines_changed);
+                    Response::json(
+                        200,
+                        &json!({"saved": path, "version": version, "lines_changed": lines_changed}),
+                    )
+                }
+                Err(code::Error::Conflict(current)) => Response::json(
+                    409,
+                    &json!({"error": code::Error::Conflict(String::new()).message(), "version": current}),
+                ),
+                Err(error) => Response::error(error.status(), &error.message()),
             }
         }
         ("POST", ["flows", name, "arm"]) => match shared.arm(name) {

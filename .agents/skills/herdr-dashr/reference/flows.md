@@ -46,7 +46,7 @@ as the verdict.
 | `steps[].optional` | A missing optional step is fine. |
 | `steps[].count` | `{"min": 1, "max": 1}`: how many spans may match — catches retries and duplicates. |
 | `steps[].max_ms` | The step's time budget. |
-| `steps[].code`, `why` | Where the span is created and what it proves. The human reviews these. |
+| `steps[].code`, `why` | Where the span is created (`path/file.cs:Function` or `path/file.py:42`) and what it proves. The viewer opens that code. |
 | `forbid` | Spans that must not appear. |
 | `no_errors` | Default `true`: any error span not expected by a step fails the flow. |
 | `max_ms` | The whole trace's budget. |
