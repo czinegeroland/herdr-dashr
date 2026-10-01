@@ -254,7 +254,10 @@ mod tests {
         assert_eq!(detect(&json!({"tables": []})), Some(Format::Appinsights));
         assert_eq!(detect(&json!({"traces": []})), Some(Format::Cloudtrace));
         assert_eq!(detect(&json!({"batches": []})), Some(Format::Otlp), "Tempo");
-        assert_eq!(detect(&json!([{"OperationId": "a"}])), Some(Format::Appinsights));
+        assert_eq!(
+            detect(&json!([{"OperationId": "a"}])),
+            Some(Format::Appinsights)
+        );
         assert_eq!(detect(&json!({"hello": 1})), None);
     }
 

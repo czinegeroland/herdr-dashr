@@ -3,7 +3,7 @@
 ```bash
 cargo test --workspace
 cargo build && mkdir -p bin && cp target/debug/dashr bin/ && herdr plugin link "$PWD"
-scripts/e2e/run.sh            # real Herdr + real Grafana; needs Docker
+scripts/e2e/run.sh            # real Herdr, Jaeger, OpenTelemetry SDK and Chrome; needs Docker
 ```
 
 Releases: dispatch the **Release** workflow from `main`; it builds the four

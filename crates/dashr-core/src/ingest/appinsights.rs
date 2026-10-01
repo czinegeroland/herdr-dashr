@@ -104,7 +104,8 @@ pub fn parse(document: &Value, source: &str) -> Result<Vec<Span>, String> {
     if let Value::Array(rows) = document {
         for row in rows {
             if let Some(object) = row.as_object() {
-                let row: BTreeMap<String, Value> = object.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let row: BTreeMap<String, Value> =
+                    object.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 out.extend(one(&row, "", source));
             }
         }
@@ -184,7 +185,10 @@ mod tests {
             "azure",
         )
         .unwrap();
-        assert_eq!((spans[0].service.as_str(), spans[0].kind), ("web", SpanKind::Server));
+        assert_eq!(
+            (spans[0].service.as_str(), spans[0].kind),
+            ("web", SpanKind::Server)
+        );
         assert_eq!(spans[0].attributes["k"], json!("v"));
     }
 }

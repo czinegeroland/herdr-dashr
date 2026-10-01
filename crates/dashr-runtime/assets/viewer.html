@@ -202,7 +202,9 @@ function sequenceSvg() {
   const showInternal = $("internal").checked;
   const messages = seq.messages.filter((m) => showInternal || m.kind !== "self_call");
   const parts = seq.participants, marks = stepMarks();
-  const colW = 190, left = 86, top = 58, rowH = 30;
+  const room = ($("pane").clientWidth || 1200) - 120;
+  const colW = Math.max(132, Math.min(190, Math.floor(room / Math.max(1, parts.length))));
+  const left = 86, top = 58, rowH = 30, nameChars = Math.floor((colW - 28) / 7.5);
   const x = (p) => left + parts.indexOf(p) * colW + colW / 2;
   // Calls, then their returns, in time order.
   const events = [];
@@ -220,7 +222,7 @@ function sequenceSvg() {
     const cx = x(p), c = p === "caller" ? "var(--muted)" : p === "?" ? "var(--warn)" : colour(p);
     svg += `<line x1="${cx}" y1="${top - 14}" x2="${cx}" y2="${height - 20}" stroke="var(--life)" stroke-dasharray="4 4"/>`;
     svg += `<rect x="${cx - colW / 2 + 10}" y="10" width="${colW - 20}" height="30" rx="6" fill="${c}" opacity="${p === "caller" ? 0.25 : 0.95}"/>`;
-    svg += `<text x="${cx}" y="30" text-anchor="middle" style="fill:${p === "caller" ? "var(--ink)" : "#fff"};font-weight:600">${esc(p.length > 24 ? p.slice(0, 23) + "…" : p)}</text>`;
+    svg += `<text x="${cx}" y="30" text-anchor="middle" style="fill:${p === "caller" ? "var(--ink)" : "#fff"};font-weight:600"><title>${esc(p)}</title>${esc(p.length > nameChars ? p.slice(0, nameChars - 1) + "…" : p)}</text>`;
   });
   // Activation bars on the callee while a call runs.
   for (const m of messages) {

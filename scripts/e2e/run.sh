@@ -7,7 +7,7 @@
 #   scripts/e2e/run.sh [path/to/dashr]
 #
 # Scenarios: AC-SESSION, AC-OTLP, AC-MASK, AC-FLOW, AC-SOURCE, AC-FORMATS,
-# AC-VIEW, AC-HERDR, AC-REAP, doctor and the npm launcher.
+# AC-VIEW, AC-HERDR, AC-REAP, AC-DOCTOR and AC-LAUNCHER.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -59,7 +59,7 @@ install -m 0755 "$DASHR_BUILT" "$ROOT/bin/dashr"
 mkdir -p "$ROOT/node_modules"
 ln -sfn ../npm/dashr "$ROOT/node_modules/herdr-dashr"
 [ "$(node "$ROOT/node_modules/herdr-dashr/bin.js" --version)" = "$("$ROOT/bin/dashr" --version)" ] || fail "the npm launcher does not run the build under test"
-ok "herdr, docker, the OpenTelemetry SDK and dashr ready; the launcher runs this build"
+ok "AC-LAUNCHER: herdr, docker, the OpenTelemetry SDK and dashr ready; the npm launcher runs this build"
 
 STATE="$WORK/state"
 CONF="$WORK/config"
@@ -315,7 +315,7 @@ wait_for 30 "! docker ps -a --format '{{.Names}}' | grep -q $HCONTAINER" || fail
 wait_for 10 "[ ! -e $HSTATE/sessions/$HSESSION.json ]" || fail "closing the pane left its session record"
 ok "closing the pane stops Jaeger (and every span with it) and removes the session"
 
-log "doctor"
+log "AC-DOCTOR: prerequisite checks"
 "${D[@]}" doctor >"$WORK/doctor.out" || { cat "$WORK/doctor.out"; fail "doctor failed"; }
 grep -q 'docker' "$WORK/doctor.out" && grep -q 'jaeger image' "$WORK/doctor.out" || fail "doctor output incomplete"
 ok "doctor passes the required checks and reports the optional ones"
