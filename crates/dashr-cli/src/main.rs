@@ -1,337 +1,182 @@
-//! The `dashr` binary: Herdr plugin entrypoints and standalone commands.
+//! `dashr`: end-to-end testing by traces.
+//!
+//! A session (a Herdr pane, or `dashr serve`) runs Jaeger and a live
+//! viewer. The human's AI session instruments a feature with OpenTelemetry,
+//! writes the flow the feature should produce for the human to review,
+//! connects the traces of every service it runs on, and checks the run
+//! against the flow — all through these commands.
 
 mod agent;
-mod db;
+mod client;
 mod doctor;
 mod herdr_cmds;
 mod pane;
-mod standalone;
-mod viewer;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use serde_json::{Value, json};
+
+use dashr_core::Config;
+use dashr_runtime::{Paths, SessionRecord};
 
 #[derive(Parser)]
 #[command(
     name = "dashr",
     version,
-    about = "Live Grafana dashboards in a Herdr pane"
+    about = "End-to-end testing by traces: one live sequence diagram of every service's spans, checked against the flow you expect",
+    after_help = "Exit codes: 0 ok or passed, 1 the flow failed, 2 bad command line, 3 the human asked for changes, 4 timed out, 5 other error."
 )]
 struct Cli {
-    /// Configuration directory (default: HERDR_PLUGIN_CONFIG_DIR, then XDG).
+    /// Configuration directory (default: HERDR_PLUGIN_CONFIG_DIR, then the platform default).
     #[arg(long, global = true)]
     config_dir: Option<PathBuf>,
     /// State directory (default: DASHR_STATE_DIR, then the platform default).
     #[arg(long, global = true)]
     state_dir: Option<PathBuf>,
+    /// The session: its id or its Herdr pane id (default: DASHR_SESSION, then the running one).
+    #[arg(long, global = true)]
+    session: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Entrypoints Herdr invokes from the plugin manifest.
-    Herdr {
-        #[command(subcommand)]
-        command: HerdrCommand,
-    },
-    /// Serve the MCP tools for one session over stdio.
-    Mcp {
-        #[arg(long, env = "DASHR_SESSION")]
-        session: String,
-        /// The herdr executable, for opening new dashboard tabs.
-        #[arg(long)]
-        herdr_bin: Option<String>,
-    },
-    /// Wait for a dashboard pane's Grafana, then print the session and the
-    /// agent's briefing as JSON. For the AI session that opened the pane.
+    /// Run a session in the foreground, without Herdr.
+    Serve,
+    /// Wait for a session (the pane `herdr plugin pane open` created) and print its endpoints.
     Wait {
-        /// A session id or its dashboard pane id (what `herdr plugin pane
-        /// open` printed); defaults to $DASHR_SESSION, else the only session.
-        #[arg(long)]
-        session: Option<String>,
-        /// Seconds to wait; the first start pulls the Grafana image.
-        #[arg(long, default_value_t = 180)]
+        #[arg(long, default_value_t = 300)]
         timeout: u64,
     },
-    /// Call one dashboard tool (the MCP tools, as a command) and print its
-    /// JSON answer, masked like every tool answer. Without a name, list the
-    /// tools and their arguments.
-    Tool {
-        /// e.g. list_datasources, probe_query, apply_dashboard, panel_status.
-        name: Option<String>,
-        /// A session id or its dashboard pane id; defaults to $DASHR_SESSION,
-        /// else the only session.
-        #[arg(long)]
-        session: Option<String>,
-        /// The tool's arguments as a JSON object.
-        #[arg(long, conflicts_with = "args_file")]
-        args: Option<String>,
-        /// A file holding the arguments (`-` for stdin), for large dashboards.
-        #[arg(long)]
-        args_file: Option<PathBuf>,
+    /// The session: endpoints, trace counts, flows, sources.
+    Status,
+    /// The OTEL_* variables that send a local service's traces to the session.
+    Env {
+        /// sh, powershell, cmd or json.
+        #[arg(long, default_value = "sh")]
+        shell: String,
     },
-    /// Install the `dashr` command globally with npm, at this version, so the
-    /// human's AI session can run it. The plugin's build step runs it.
+    /// Recent traces, newest first (masked).
+    Traces {
+        /// Only traces that ended within this window: 30s, 10m, 2h, 1d.
+        #[arg(long)]
+        since: Option<String>,
+        /// A glob on a service name.
+        #[arg(long)]
+        service: Option<String>,
+        /// A glob on a span name.
+        #[arg(long)]
+        name: Option<String>,
+        /// key=value an attribute of some span must have (repeatable; `*` for any value).
+        #[arg(long = "attr")]
+        attrs: Vec<String>,
+        /// Only traces with an error span.
+        #[arg(long)]
+        errors: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// One trace as a sequence (masked); --json for every span.
+    Trace {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Flows: the trace a feature should produce, reviewed by the human, checked against runs.
+    Flow {
+        #[command(subcommand)]
+        command: FlowCommand,
+    },
+    /// Pull sources: commands that fetch traces from wherever the services run.
+    Source {
+        #[command(subcommand)]
+        command: SourceCommand,
+    },
+    /// Import traces once from a file or stdin (`-`).
+    Ingest {
+        file: PathBuf,
+        /// auto, otlp, otlp-proto, xray, zipkin, jaeger, appinsights, cloudtrace.
+        #[arg(long, default_value = "auto")]
+        format: String,
+        #[arg(long, default_value = "import")]
+        source: String,
+    },
+    /// Every session this machine knows, and whether it answers.
+    Sessions,
+    /// Check Docker, Herdr and the cloud CLIs.
+    Doctor,
+    /// Install the `dashr` command globally with npm, at this version.
     Global {
         #[command(subcommand)]
         command: GlobalCommand,
     },
-    /// What is running here and what can be measured: containers, their
-    /// kind and log formats, metrics endpoints, installed CLIs, project
-    /// files, and the `dashr collect` commands that would make them live.
-    Discover,
-    /// Live data for a session's dashboard, collected by its pane: `docker`,
-    /// `host`, `process`, `logs`, `stream`, `exec`, `scrape`, `postgres`,
-    /// `mysql`, `redis`; `list` and `remove` manage them.
-    Collect {
-        /// A session id or its dashboard pane id; defaults to $DASHR_SESSION,
-        /// else the only session.
-        #[arg(long, global = true)]
-        session: Option<String>,
+    /// Entrypoints Herdr invokes from the plugin manifest.
+    #[command(hide = true)]
+    Herdr {
         #[command(subcommand)]
-        command: CollectCommand,
+        command: HerdrCommand,
     },
-    /// Database query performance for PostgreSQL and SQL Server: `add`
-    /// connects a database to the session's Grafana (a connection string, or
-    /// parts plus a password command and a tunnel command for cloud
-    /// databases reached through a CLI), `dashboard` prints its ready-made
-    /// dashboard, `plan` saves a SQL Server statement's plan for the human.
-    Db {
-        /// A session id or its dashboard pane id; defaults to $DASHR_SESSION,
-        /// else the only session.
-        #[arg(long, global = true)]
-        session: Option<String>,
-        #[command(subcommand)]
-        command: DbCommand,
-    },
-    /// Manage sessions without Herdr.
-    Session {
-        #[command(subcommand)]
-        command: SessionCommand,
-    },
-    /// Validate and push a dashboard JSON file into a session.
-    Apply {
-        #[arg(long, env = "DASHR_SESSION")]
-        session: String,
+}
+
+#[derive(Subcommand)]
+enum FlowCommand {
+    /// Add or replace a flow from a JSON file (`-` for stdin); a changed flow needs review again.
+    Set {
+        #[arg(default_value = "-")]
         file: PathBuf,
     },
-    /// Print panel status (no values) for a session.
-    Status {
-        #[arg(long, env = "DASHR_SESSION")]
-        session: String,
-    },
-    /// Promote a session's dashboard to the persistent Grafana.
-    Promote {
-        #[arg(long, env = "DASHR_SESSION")]
-        session: String,
-        #[arg(long)]
-        title: Option<String>,
-    },
-    /// Run a command and ship its stdout and stderr lines to a session's
-    /// OpenTelemetry endpoint (or ship stdin when no command is given).
-    /// The output still reaches the terminal and the exit code passes through.
-    Tail {
-        /// Defaults to $DASHR_SESSION, else the only OpenTelemetry session.
-        #[arg(long)]
-        session: Option<String>,
-        /// The `service.name` the lines are stored under; defaults to the
-        /// command's name.
-        #[arg(long)]
-        service: Option<String>,
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        command: Vec<String>,
-    },
-    /// Arm log expectations on a session's dashboard: tiles that turn green
-    /// when an expected message is logged (red for a forbidden one) and a
-    /// live trail highlighting them. `'NAME = PATTERN'` or just `PATTERN`.
-    Expect {
-        /// Defaults to $DASHR_SESSION, else the only session with Loki.
-        #[arg(long)]
-        session: Option<String>,
-        /// A message that should appear (repeatable).
-        #[arg(short = 'p', long = "present")]
-        present: Vec<String>,
-        /// A message that must not appear (repeatable).
-        #[arg(short = 'a', long = "absent")]
-        absent: Vec<String>,
-        /// LogQL stream selector, e.g. '{service_name="checkout"}'.
-        #[arg(long)]
-        selector: Option<String>,
-        /// Print the current verdict instead of arming; exit 1 unless passed.
-        #[arg(long, conflicts_with_all = ["present", "absent", "clear"])]
-        check: bool,
-        /// Remove the expectations from the dashboard.
-        #[arg(long, conflicts_with_all = ["present", "absent"])]
-        clear: bool,
-    },
-    /// Dashboards saved on this machine: save a session's dashboard under a
-    /// name and load it into a later session.
-    Dashboards {
-        #[command(subcommand)]
-        command: DashboardsCommand,
-    },
-    /// Inspect a CodePipeline and print the inventory and proposed dashboard.
-    Pipeline {
-        url: String,
-        /// Print only the proposed dashboard JSON.
-        #[arg(long)]
-        dashboard_only: bool,
-    },
-    /// Stop dashr containers whose owner is gone.
-    Reap,
-    /// Build the custom Grafana image with Infinity and Zabbix plugins.
-    Image {
-        #[command(subcommand)]
-        command: ImageCommand,
-    },
-    /// Configuration helpers.
-    Config {
-        #[command(subcommand)]
-        command: ConfigCommand,
-    },
-    /// Check prerequisites.
-    Doctor,
-    /// The dashboard-building agent skill (installed into ~/.claude/skills by default).
-    Skill {
-        #[command(subcommand)]
-        command: SkillCommand,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum DbCommand {
-    /// Connect a database and start sampling it.
-    Add(Box<DbAdd>),
-    /// Print the database's dashboard, for `dashr tool apply_dashboard --args-file -`.
-    Dashboard {
-        name: String,
-        /// Added to panel ids, to merge the panels into another dashboard.
-        #[arg(long, default_value_t = 0)]
-        id_offset: u64,
-        /// Added to panel rows, to place the panels below existing ones.
-        #[arg(long, default_value_t = 0)]
-        y_offset: u64,
-    },
-    /// The session's databases and their collectors.
+    /// Every flow with its review and status.
     List,
-    /// Disconnect a database.
-    Remove { name: String },
-    /// Save a SQL Server statement's cached plan (`query_hash` from the
-    /// dashboard) as a `.sqlplan` file for the human.
-    Plan {
+    /// A flow, its review and its verdict (masked).
+    Show { name: String },
+    /// Count only runs from now on.
+    Arm { name: String },
+    /// Wait for the human's review (--review) or for the verdict.
+    Wait {
         name: String,
-        query_hash: String,
         #[arg(long)]
-        out: Option<PathBuf>,
+        review: bool,
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
     },
-}
-
-#[derive(clap::Args)]
-pub struct DbAdd {
-    /// A short name, e.g. `orders`.
-    pub name: String,
-    /// A connection string (`postgres://…`, `host=… dbname=…`,
-    /// `Server=…;Database=…;User ID=…;Password=…`); `-` reads it from stdin.
-    #[arg(long, conflicts_with = "url_env")]
-    pub url: Option<String>,
-    /// An environment variable holding the connection string.
-    #[arg(long)]
-    pub url_env: Option<String>,
-    /// `postgres` or `mssql`, when giving parts instead of a string.
-    #[arg(long)]
-    pub engine: Option<String>,
-    #[arg(long)]
-    pub host: Option<String>,
-    #[arg(long)]
-    pub port: Option<u16>,
-    #[arg(long)]
-    pub database: Option<String>,
-    #[arg(long)]
-    pub user: Option<String>,
-    /// An environment variable holding the password.
-    #[arg(long)]
-    pub password_env: Option<String>,
-    /// A command printing the password (an RDS IAM token, a Secrets Manager
-    /// or Key Vault secret); the pane re-runs it every --refresh-secs.
-    #[arg(long)]
-    pub password_command: Option<String>,
-    #[arg(long, default_value_t = 600)]
-    pub refresh_secs: u64,
-    /// A command forwarding the database to --host:--port (an SSM port
-    /// forwarding session, `ssh -L`, `kubectl port-forward`); the pane keeps
-    /// it running.
-    #[arg(long)]
-    pub tunnel_command: Option<String>,
-    /// PostgreSQL sslmode, or SQL Server encrypt (true, false, disable).
-    #[arg(long)]
-    pub tls: Option<String>,
-    /// SQL Server: accept the server's certificate without validation.
-    #[arg(long)]
-    pub trust_server_certificate: bool,
+    /// Remove a flow.
+    Rm { name: String },
 }
 
 #[derive(Subcommand)]
-pub enum CollectCommand {
-    /// CPU, memory, network and disk IO of containers (all running ones
-    /// when none are named).
-    Docker { containers: Vec<String> },
-    /// This machine's CPU, memory, disks and network.
-    Host,
-    /// Processes whose name contains NAME (e.g. `dotnet`, `node`).
-    Process { name: String },
-    /// A container's log: lines to Loki, request rate, errors and latency
-    /// from them (`docker logs -f`).
-    Logs {
-        container: String,
-        #[arg(long)]
-        service: Option<String>,
-    },
-    /// Any long-running command that prints log lines, e.g.
-    /// `kubectl logs -f deploy/api`, `aws logs tail --follow /ecs/api`,
-    /// `az webapp log tail`, `gcloud logging tail`.
-    Stream {
-        #[arg(long)]
-        service: String,
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
-        command: Vec<String>,
-    },
-    /// Any command, run every --every seconds, that prints Prometheus text
-    /// (`name{label="v"} 1.5` lines): the adapter for clouds and anything
-    /// else.
-    Exec {
-        #[arg(long)]
-        service: String,
-        #[arg(long, default_value_t = 60)]
+enum SourceCommand {
+    /// Add a source: tried once now, then run every --every seconds. The command gets
+    /// DASHR_SINCE/DASHR_UNTIL (Unix seconds, also _MS and _ISO) for the window to read.
+    Add {
+        name: String,
+        #[arg(long, default_value_t = 15)]
         every: u64,
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        /// auto, otlp, otlp-proto, xray, zipkin, jaeger, appinsights, cloudtrace.
+        #[arg(long, default_value = "auto")]
+        format: String,
+        /// Minutes the first run reads back.
+        #[arg(long)]
+        lookback: Option<u64>,
+        /// Keep the source when its trial run fails (a login still to come).
+        #[arg(long)]
+        keep_on_error: bool,
+        /// The command, after `--`.
+        #[arg(last = true, required = true)]
         command: Vec<String>,
     },
-    /// A Prometheus /metrics endpoint.
-    Scrape {
-        url: String,
-        #[arg(long)]
-        service: Option<String>,
-    },
-    /// A Postgres container.
-    Postgres { container: String },
-    /// A MySQL or MariaDB container.
-    Mysql { container: String },
-    /// A Redis container.
-    Redis { container: String },
-    /// The session's collectors and whether each one is working.
+    /// Sources and their health.
     List,
-    /// Stop a collector (its id as `list` shows it).
-    Remove { id: String },
+    /// Stop and remove a source.
+    Rm { name: String },
 }
 
 #[derive(Subcommand)]
 enum GlobalCommand {
-    /// `npm install -g herdr-dashr@<this version>`.
     Install {
-        /// Report a failure instead of failing (the plugin build step).
+        /// Report a failure instead of failing (the plugin's build step).
         #[arg(long)]
         best_effort: bool,
     },
@@ -339,117 +184,144 @@ enum GlobalCommand {
 
 #[derive(Subcommand)]
 enum HerdrCommand {
-    /// Print the plugin manifest.
+    /// Print the generated herdr-plugin.toml.
     Manifest,
-    /// Run a manifest action.
-    Action { id: String },
-    /// Run a manifest pane.
-    Pane { id: String },
-    /// Handle a manifest event hook.
-    Event { name: String },
-    /// The startup hook.
     Startup,
-}
-
-#[derive(Subcommand)]
-enum SessionCommand {
-    /// Start a Grafana session and print its record as JSON.
-    Start {
-        #[arg(long, default_value = "default")]
+    Event {
         name: String,
-        #[arg(long)]
-        pipeline: Option<String>,
-        /// Start in OpenTelemetry mode (Grafana with Loki, Tempo, Prometheus
-        /// and an OTLP endpoint), whatever the configuration says.
-        #[arg(long)]
-        otel: bool,
-        /// Show this saved dashboard instead of the welcome dashboard.
-        #[arg(long)]
-        load: Option<String>,
     },
-    /// Stop a session and delete its files.
-    Stop { session: String },
-    /// List sessions.
-    List,
-}
-
-#[derive(Subcommand)]
-enum DashboardsCommand {
-    /// Save a session's current dashboard under a name.
-    Save {
-        name: String,
-        /// Defaults to $DASHR_SESSION, else the only running session.
-        #[arg(long)]
-        session: Option<String>,
-        /// Replace a saved dashboard with the same name.
-        #[arg(long)]
-        force: bool,
+    Action {
+        id: String,
     },
-    /// List saved dashboards, newest first.
-    List,
-    /// Replace a session's dashboard with a saved one.
-    Load {
-        name: String,
-        #[arg(long)]
-        session: Option<String>,
-    },
-    /// Print a saved dashboard's JSON.
-    Show { name: String },
-    /// Delete a saved dashboard.
-    Delete { name: String },
-}
-
-#[derive(Subcommand)]
-enum ImageCommand {
-    Build {
-        #[arg(long)]
-        tag: Option<String>,
+    Pane {
+        id: String,
     },
 }
 
-#[derive(Subcommand)]
-enum ConfigCommand {
-    /// Print a commented example configuration.
-    Example,
-    /// Print the configuration file path.
-    Path,
+/// The OTEL_* settings that send a service's traces to the session.
+pub fn jaeger_env(record: &SessionRecord) -> Value {
+    json!({
+        "OTEL_EXPORTER_OTLP_ENDPOINT": record.otlp_http(),
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_TRACES_EXPORTER": "otlp",
+        "OTEL_TRACES_SAMPLER": "always_on",
+        "OTEL_BSP_SCHEDULE_DELAY": "500",
+        "OTEL_METRICS_EXPORTER": "none",
+        "OTEL_LOGS_EXPORTER": "none",
+    })
 }
 
-#[derive(Subcommand)]
-enum SkillCommand {
-    /// Install or refresh the skill in the configured skill directories.
-    Install {
-        /// Install into this skills directory instead of the configured ones.
-        #[arg(long)]
-        dir: Option<PathBuf>,
-        /// Replace a same-named skill that dashr did not write.
-        #[arg(long)]
-        force: bool,
-        /// Report problems but always exit 0 (used by the plugin build step).
-        #[arg(long)]
-        best_effort: bool,
-    },
-    /// Remove the skill, if dashr installed it.
-    Uninstall {
-        #[arg(long)]
-        dir: Option<PathBuf>,
-    },
-    /// Print one of the skill's files (default SKILL.md).
-    Print {
-        #[arg(default_value = "SKILL.md")]
-        file: String,
-    },
-    /// List the skill's files.
-    Files,
+fn global_install_argv(windows: bool) -> Vec<String> {
+    let npm = [
+        "npm",
+        "install",
+        "-g",
+        "--no-audit",
+        "--no-fund",
+        concat!("herdr-dashr@", env!("CARGO_PKG_VERSION")),
+    ];
+    let prefix: &[&str] = if windows { &["cmd", "/c"] } else { &[] };
+    prefix
+        .iter()
+        .chain(npm.iter())
+        .map(|a| (*a).to_owned())
+        .collect()
 }
 
-/// An error for the user: printed to stderr, exit status 1.
-pub type Result<T> = std::result::Result<T, String>;
+/// Puts `dashr` on the human's PATH for their AI session. With
+/// `best_effort` a failure is reported and the plugin install goes on.
+fn global_install(best_effort: bool) -> Result<(), String> {
+    let argv = global_install_argv(cfg!(windows));
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .status();
+    let failure = match status {
+        Ok(status) if status.success() => {
+            println!(
+                "dashr: installed the dashr command globally ({})",
+                env!("CARGO_PKG_VERSION")
+            );
+            return Ok(());
+        }
+        Ok(status) => format!("npm exited with {status}"),
+        Err(error) => format!("could not run npm: {error}"),
+    };
+    let message = format!(
+        "the dashr command was not installed globally ({failure}); run `npm install -g herdr-dashr@{}` yourself",
+        env!("CARGO_PKG_VERSION")
+    );
+    if best_effort {
+        println!("dashr: {message}");
+        Ok(())
+    } else {
+        Err(message)
+    }
+}
 
-fn run(cli: Cli) -> Result<()> {
-    let paths = dashr_runtime::Paths::resolve(cli.config_dir, cli.state_dir);
+fn run(cli: Cli) -> agent::Outcome {
+    let paths = Paths::resolve(cli.config_dir, cli.state_dir);
+    let session = cli.session.as_deref();
+    let config = || Config::load_from_dir(&paths.config_dir);
+    let done = |result: Result<(), String>| result.map(|()| 0u8);
     match cli.command {
-        Command::Herdr { command } => match command {
+        Command::Serve => done(pane::serve(&paths, &config()?, cli.session.clone())),
+        Command::Wait { timeout } => agent::wait(&paths, session, timeout),
+        Command::Status => agent::status(&paths, session),
+        Command::Env { shell } => agent::env(&paths, session, &shell),
+        Command::Traces {
+            since,
+            service,
+            name,
+            attrs,
+            errors,
+            limit,
+        } => agent::traces(&paths, session, since, service, name, attrs, errors, limit),
+        Command::Trace { id, json } => agent::trace(&paths, session, &id, json),
+        Command::Flow { command } => match command {
+            FlowCommand::Set { file } => agent::flow_set(&paths, session, &file),
+            FlowCommand::List => agent::flow_list(&paths, session),
+            FlowCommand::Show { name } => agent::flow_show(&paths, session, &name),
+            FlowCommand::Arm { name } => agent::flow_arm(&paths, session, &name),
+            FlowCommand::Wait {
+                name,
+                review,
+                timeout,
+            } => agent::flow_wait(&paths, session, &name, review, timeout),
+            FlowCommand::Rm { name } => agent::flow_remove(&paths, session, &name),
+        },
+        Command::Source { command } => match command {
+            SourceCommand::Add {
+                name,
+                every,
+                format,
+                lookback,
+                keep_on_error,
+                command,
+            } => agent::source_add(
+                &paths,
+                session,
+                &name,
+                every,
+                &format,
+                lookback,
+                keep_on_error,
+                command,
+            ),
+            SourceCommand::List => agent::source_list(&paths, session),
+            SourceCommand::Rm { name } => agent::source_remove(&paths, session, &name),
+        },
+        Command::Ingest {
+            file,
+            format,
+            source,
+        } => agent::ingest(&paths, session, &file, &format, &source),
+        Command::Sessions => agent::sessions(&paths),
+        Command::Doctor => done(doctor::run(&paths)),
+        Command::Global {
+            command: GlobalCommand::Install { best_effort },
+        } => done(global_install(best_effort)),
+        Command::Herdr { command } => done(match command {
             HerdrCommand::Manifest => {
                 print!(
                     "{}",
@@ -457,176 +329,77 @@ fn run(cli: Cli) -> Result<()> {
                 );
                 Ok(())
             }
-            HerdrCommand::Action { id } => herdr_cmds::action(&paths, &id),
-            HerdrCommand::Pane { id } => match id.as_str() {
-                "dashboard" => pane::dashboard(&paths),
-                "doctor" => doctor::pane(&paths),
-                other => Err(format!("unknown pane {other}")),
-            },
-            HerdrCommand::Event { name } => match name.as_str() {
-                "pane-closed" => herdr_cmds::pane_closed(&paths),
-                other => Err(format!("unknown event {other}")),
-            },
-            HerdrCommand::Startup => herdr_cmds::startup(&paths),
-        },
-        Command::Mcp { session, herdr_bin } => standalone::mcp(&paths, &session, herdr_bin),
-        Command::Global {
-            command: GlobalCommand::Install { best_effort },
-        } => standalone::global_install(best_effort),
-        Command::Discover => agent::discover(),
-        Command::Collect { session, command } => {
-            agent::collect(&paths, session.as_deref(), command)
-        }
-        Command::Db { session, command } => {
-            let session = session.as_deref();
-            match command {
-                DbCommand::Add(args) => db::add(&paths, session, *args),
-                DbCommand::Dashboard {
-                    name,
-                    id_offset,
-                    y_offset,
-                } => db::dashboard(&paths, session, &name, id_offset, y_offset),
-                DbCommand::List => db::list(&paths, session),
-                DbCommand::Remove { name } => db::remove(&paths, session, &name),
-                DbCommand::Plan {
-                    name,
-                    query_hash,
-                    out,
-                } => db::plan(&paths, session, &name, &query_hash, out),
+            HerdrCommand::Startup => herdr_cmds::startup(&paths, &config()?),
+            HerdrCommand::Event { name } if name == "pane-closed" => {
+                herdr_cmds::pane_closed(&paths, &config()?)
             }
-        }
-        Command::Wait { session, timeout } => agent::wait(
-            &paths,
-            session.as_deref(),
-            std::time::Duration::from_secs(timeout),
-        ),
-        Command::Tool {
-            name,
-            session,
-            args,
-            args_file,
-        } => agent::tool(
-            &paths,
-            session.as_deref(),
-            name.as_deref(),
-            args.as_deref(),
-            args_file.as_deref(),
-        ),
-        Command::Session { command } => match command {
-            SessionCommand::Start {
-                name,
-                pipeline,
-                otel,
-                load,
-            } => {
-                standalone::session_start(&paths, &name, pipeline.as_deref(), otel, load.as_deref())
+            HerdrCommand::Event { name } => Err(format!("unknown event {name:?}")),
+            HerdrCommand::Action { id } => herdr_cmds::action(&id),
+            HerdrCommand::Pane { id } if id == "traces" => pane::traces(&paths, &config()?),
+            HerdrCommand::Pane { id } if id == "doctor" => {
+                let result = doctor::run(&paths);
+                println!("\nPress Enter to close.");
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                result
             }
-            SessionCommand::Stop { session } => standalone::session_stop(&paths, &session),
-            SessionCommand::List => standalone::session_list(&paths),
-        },
-        Command::Apply { session, file } => standalone::apply(&paths, &session, &file),
-        Command::Status { session } => standalone::status(&paths, &session),
-        Command::Promote { session, title } => {
-            standalone::promote(&paths, &session, title.as_deref())
-        }
-        Command::Tail {
-            session,
-            service,
-            command,
-        } => standalone::tail(&paths, session.as_deref(), service.as_deref(), &command),
-        Command::Expect {
-            session,
-            present,
-            absent,
-            selector,
-            check,
-            clear,
-        } => standalone::expect(
-            &paths,
-            session.as_deref(),
-            standalone::ExpectRequest {
-                present,
-                absent,
-                selector,
-                check,
-                clear,
-            },
-        ),
-        Command::Dashboards { command } => match command {
-            DashboardsCommand::Save {
-                name,
-                session,
-                force,
-            } => standalone::dashboards_save(&paths, session.as_deref(), &name, force),
-            DashboardsCommand::List => standalone::dashboards_list(&paths),
-            DashboardsCommand::Load { name, session } => {
-                standalone::dashboards_load(&paths, session.as_deref(), &name)
-            }
-            DashboardsCommand::Show { name } => standalone::dashboards_show(&paths, &name),
-            DashboardsCommand::Delete { name } => standalone::dashboards_delete(&paths, &name),
-        },
-        Command::Pipeline {
-            url,
-            dashboard_only,
-        } => standalone::pipeline(&paths, &url, dashboard_only),
-        Command::Reap => standalone::reap(&paths),
-        Command::Image {
-            command: ImageCommand::Build { tag },
-        } => standalone::image_build(&paths, tag),
-        Command::Config { command } => match command {
-            ConfigCommand::Example => {
-                print!("{}", dashr_core::config::EXAMPLE);
-                Ok(())
-            }
-            ConfigCommand::Path => {
-                println!(
-                    "{}",
-                    paths
-                        .config_dir
-                        .join(dashr_core::config::FILE_NAME)
-                        .display()
-                );
-                Ok(())
-            }
-        },
-        Command::Doctor => doctor::run(&paths).map(|_| ()),
-        Command::Skill { command } => match command {
-            SkillCommand::Install {
-                dir,
-                force,
-                best_effort,
-            } => {
-                let result = standalone::skill_install(&paths, dir, force);
-                match (result, best_effort) {
-                    (Err(message), true) => {
-                        eprintln!("dashr: skill not installed: {message}");
-                        Ok(())
-                    }
-                    (result, _) => result,
-                }
-            }
-            SkillCommand::Uninstall { dir } => standalone::skill_uninstall(&paths, dir),
-            SkillCommand::Print { file } => dashr_runtime::skill::FILES
-                .iter()
-                .find(|(name, _)| *name == file)
-                .map(|(_, contents)| print!("{contents}"))
-                .ok_or_else(|| format!("no skill file {file}; see `dashr skill files`")),
-            SkillCommand::Files => {
-                for (name, _) in dashr_runtime::skill::FILES {
-                    println!("{name}");
-                }
-                Ok(())
-            }
-        },
+            HerdrCommand::Pane { id } => Err(format!("unknown pane {id:?}")),
+        }),
     }
 }
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("dashr: {message}");
-            ExitCode::FAILURE
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("dashr: {error}");
+            ExitCode::from(5)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installs_this_version_through_cmd_on_windows() {
+        let pinned = format!("herdr-dashr@{}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            global_install_argv(false),
+            [
+                "npm",
+                "install",
+                "-g",
+                "--no-audit",
+                "--no-fund",
+                pinned.as_str()
+            ]
+        );
+        assert_eq!(global_install_argv(true)[..3], ["cmd", "/c", "npm"]);
+    }
+
+    #[test]
+    fn the_command_line_parses() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+        let cli = Cli::try_parse_from([
+            "dashr",
+            "source",
+            "add",
+            "xray",
+            "--format",
+            "xray",
+            "--every",
+            "20",
+            "--",
+            "sh",
+            "-c",
+            "aws xray get-trace-summaries",
+        ])
+        .unwrap();
+        assert!(
+            matches!(cli.command, Command::Source { command: SourceCommand::Add { ref command, .. } } if command.len() == 3)
+        );
     }
 }

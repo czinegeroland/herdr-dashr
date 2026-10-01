@@ -76,7 +76,7 @@ function published() {
 // Runs the executable in the foreground and exits the way it did.
 function run(resolved) {
   // Asynchronous, so this process stays responsive to signals and forwards
-  // them: the dashboard pane stops its Grafana on SIGHUP, and a shim that
+  // them: the trace pane stops its Jaeger on SIGHUP, and a shim that
   // swallowed it would leave the container running.
   const child = spawn(resolved, process.argv.slice(2), { stdio: 'inherit' })
 

@@ -1,8 +1,9 @@
 name: End to end
 
-# DASHR-TECH-003: a real Herdr server, the plugin linked from this checkout,
-# a real Grafana container, and the MCP server driven over stdio
-# (scripts/e2e/run.sh), and a real Chrome opening the pane's link.
+# DASHR-TECH-003: the real binary, a real Jaeger container, services
+# instrumented with the real OpenTelemetry SDK, a real Herdr server with the
+# plugin linked from this checkout, and a real Chrome showing the viewer
+# (scripts/e2e/run.sh).
 # Linux only: GitHub's macOS runners have no Docker.
 on:
   push:
@@ -31,14 +32,8 @@ jobs:
           shared-key: e2e
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --locked --bin dashr
-      # The Chrome scenario (DASHR-VIEW-*): the human opens the pane's link in
-      # their own browser; the runner's Chrome stands in for it, driven over
-      # the DevTools protocol (scripts/e2e/cdp_eval.py).
-      - name: Chrome's DevTools client
-        run: python3 -m pip install --user websocket-client
       - run: scripts/e2e/run.sh target/debug/dashr
         env:
-          DASHR_E2E_BROWSER: "1"
           DASHR_E2E_ARTIFACTS: ${{ github.workspace }}/e2e-screens
       # Pictures of the running product from the Chrome scenarios.
       - uses: actions/upload-artifact@v7

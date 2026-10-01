@@ -163,6 +163,37 @@ pub mod argv {
         args
     }
 
+    /// `herdr plugin pane open` as a split beside `target`, without focus.
+    pub fn plugin_pane_split(
+        plugin: &str,
+        entrypoint: &str,
+        target: &str,
+        direction: &str,
+        env: &[(String, String)],
+    ) -> Vec<String> {
+        let mut args = owned(&[
+            "plugin",
+            "pane",
+            "open",
+            "--plugin",
+            plugin,
+            "--entrypoint",
+            entrypoint,
+            "--placement",
+            "split",
+            "--target-pane",
+            target,
+            "--direction",
+            direction,
+        ]);
+        for (key, value) in env {
+            args.push("--env".into());
+            args.push(format!("{key}={value}"));
+        }
+        args.push("--no-focus".into());
+        args
+    }
+
     pub fn plugin_pane_open(
         plugin: &str,
         entrypoint: &str,

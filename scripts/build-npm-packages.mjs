@@ -135,11 +135,11 @@ function main() {
       {
         name: ROOT_PACKAGE,
         version,
-        description: 'Live Grafana dashboards your AI agent builds, right beside your chat in Herdr.',
+        description: 'End-to-end testing by traces: your AI agent instruments a feature with OpenTelemetry, you review the planned spans, and every service\'s spans (local, AWS X-Ray, Azure, Google Cloud, Jaeger, Zipkin) meet in one live sequence diagram checked against the expected flow.',
         license: 'Apache-2.0',
         repository: { type: 'git', url: `git+${REPOSITORY}.git` },
         homepage: REPOSITORY,
-        keywords: ['herdr', 'herdr-plugin', 'grafana', 'dashboard', 'mcp', 'observability'],
+        keywords: ['herdr', 'herdr-plugin', 'opentelemetry', 'tracing', 'e2e-testing', 'jaeger', 'aws-xray', 'sequence-diagram', 'ai-agent'],
         type: 'module',
         bin: { dashr: 'bin.js' },
         files: ['bin.js', 'LICENSE', 'README.md'],

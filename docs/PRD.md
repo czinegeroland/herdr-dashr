@@ -1,19 +1,19 @@
-# Herdr Dashr Product Requirements Document
+# dashr Product Requirements Document
 
 ## Document control
 
 | Field | Value |
 |---|---|
-| Product | Herdr Dashr |
+| Product | dashr — end-to-end testing by traces |
 | Command | `dashr` |
 | Herdr plugin id | `herdr-dashr` |
+| npm package | `herdr-dashr` |
 | Repository | `czinegeroland/herdr-dashr` |
-| Document status | Draft |
-| PRD version | 0.1.0 |
-| Delivery phase | v0.1.0 - first public release: live dashboards, CodePipeline bootstrap, agent skill, OpenTelemetry and live log checks, saved dashboards |
-| Last updated | 2026-09-28T10:00:00Z |
+| Document status | Active |
+| PRD version | 2.0.0 |
+| Delivery phase | v2.0.0 — the rewrite: trace sessions, pull sources, flows reviewed by the human and checked against runs, live sequence diagrams |
+| Last updated | 2026-10-01T22:00:00Z |
 | Product owner | @czinegeroland |
-| Source handoff | `docs/DESIGN.md` |
 
 ## Living PRD policy
 
@@ -47,400 +47,233 @@ criterion in backticks.
 
 ## 1. Executive summary
 
-Herdr Dashr is a Herdr plugin that opens an **agent-built, live Grafana
-dashboard inside a Herdr pane** for debugging deployed work. One action — or
-one Ctrl-click on an AWS CodePipeline URL — opens a tab with the real Grafana
-UI on top (rendered by terminal-browser) and a coding agent underneath. The
-agent designs dashboards for the problem at hand through an MCP server; Grafana
-refreshes the data itself, so **no model sits in the data path**, and a
-masking layer guarantees the agent designs from schemas and masked samples
-while only the human sees real values.
+dashr turns a coding agent into an end-to-end tester that reads traces
+instead of logs. When a feature is done, the human's AI session instruments
+it with OpenTelemetry spans at its business steps, writes the **flow** the
+feature should produce — services, spans, attributes, values, and where in
+the code each span is made — and the human reviews that flow in the
+browser. Then the feature runs where it really runs: locally, or in an
+ephemeral cloud environment spread over many services and accounts. dashr
+gathers every service's spans — exported straight to the session's Jaeger,
+or pulled from AWS X-Ray, Azure Application Insights, Google Cloud Trace,
+Jaeger, Tempo or Zipkin — into one trace, draws it live as a sequence
+diagram, and gives the agent a step-by-step verdict against the flow.
 
-The Grafana is **pane-owned and stores nothing**: an in-memory container on a
-loopback port, started with the pane and removed when it closes.
+Version 2.0 replaces the 1.x product (agent-built Grafana dashboards),
+which its owner found of little use after a week; the 1.x delivery history
+is kept in section 14.
 
 ## 2. Problem statement
 
-Debugging an ephemeral environment deployed from a pipeline today means
-pasting a CodePipeline link to an agent and watching it tail logs, poll SQS
-queues and follow Step Functions executions as text. The agent sits in the
-data path, burns tokens re-reading the same logs, and sees every value —
-including personal data in application logs. The Herdr marketplace (~1,300
-plugins) has no observability dashboard plugin, and Herdr accepts no
-unsolicited core pull requests, so a plugin is the only delivery path.
+The owner develops a feature, deploys the branch to an ephemeral
+environment, and asks an AI agent to tail the logs while they trigger the
+feature; the agent decides from log lines whether it worked. That fails in
+three ways:
+
+1. Logs are fragments. Whether a request crossed the five services it should
+   have, in order, with the right data, must be reconstructed by guessing.
+2. A distributed feature — a Step Functions state machine with ten Lambdas
+   and an ECS task, services in several AWS accounts — reports to several
+   backends. Nothing puts its pieces next to each other.
+3. Nobody checks that the instrumentation itself is right: the human rarely
+   reads the implementation.
 
 ## 3. Goals
 
-- **G-001 One delegation, one dashboard.** A single action opens a dashboard
-  built for the problem, with a chat underneath to reshape it.
-- **G-002 No model in the data path.** Grafana refreshes data; the agent only
-  changes the dashboard.
-- **G-003 Privacy by construction.** The agent never receives unmasked
-  datasource values.
-- **G-004 Disposable.** Nothing survives the pane: no container, no
-  database, no browser profile, no runtime file.
-- **G-005 Useful before the agent speaks.** A pipeline URL yields a first
-  dashboard with no model involved.
-- **G-006 Living specification.** This PRD tracks delivery, enforced by CI.
+| ID | Goal |
+|---|---|
+| G1 | One live trace of a feature run across every service and system it touches, wherever each reports. |
+| G2 | The human checks the planned instrumentation (the flow) before the test, without reading code. |
+| G3 | The agent gets a precise, step-by-step verdict it can act on, not a log tail to interpret. |
+| G4 | The agent decides where traces come from; dashr is not tied to one cloud. |
+| G5 | Personal data and secrets in spans never reach the agent. |
+| G6 | Nothing left behind: closing the pane drops every span. |
 
 ## 4. Non-goals
 
-- A terminal-native chart renderer. terminal-browser shows the real Grafana.
-- A persistent Grafana. `promote` copies to one the team already runs.
-- Features the Herdr plugin API cannot support today: plugin items in
-  right-click menus (#1722), plugin-owned sidebar sections (#1609),
-  triggering built-in actions (#1624), theme colours in plugin panes (#1796).
-- Windows. terminal-browser supports Linux and macOS only.
+- A tracing backend for teams or production: the session is disposable.
+- Writing instrumentation automatically: the agent does it, the human reviews.
+- Metrics and log storage: Jaeger takes traces only.
+- Cloud-specific code paths: clouds are reached through their own CLIs, in
+  commands the agent writes.
 
 ## 5. Personas and use cases
 
-- **P-001 Developer** debugging an ephemeral environment in Herdr.
-- **P-002 Coding agent** (Claude Code by default) in the chat pane.
-- **UC-001** Open a live dashboard and ask the agent for a view of a system.
-- **UC-002** Ctrl-click a CodePipeline URL; get a dashboard of the stacks it
-  deployed (log groups, queues and DLQs, state machines, Lambdas).
-- **UC-003** Ask the agent to alert when a panel crosses a threshold; get a
-  Herdr notification and a blocked pane without the agent seeing values.
-- **UC-004** Promote a useful dashboard to the team's Grafana.
-- **UC-005** "I am about to run this; show me the right log messages fire":
-  send the program's logs (OTLP, or `dashr tail`) to the pane's own Loki, name
-  the messages that should and must not appear, and watch a tile per message
-  turn green (or red) above a live, highlighted log trail.
-- **UC-006** Keep a dashboard that proved useful: name it, and reopen it in a
-  pane next week without rebuilding it.
+| Persona | Use case |
+|---|---|
+| Developer (owner) | "I finished the checkout change; test it end to end on my ephemeral env." |
+| Developer | "Show me what really happens when an order is placed — all services." |
+| AI coding agent | Instrument, write the flow, connect sources, trigger, judge, explain. |
+
+Typical session: the agent opens the trace pane beside itself; adds spans to
+the feature; `dashr flow set`; the human approves in the viewer; the agent
+adds a pull source for X-Ray in two AWS accounts; `dashr flow arm`; the
+human triggers the feature; `dashr flow wait` reports `ChargeCard`'s Lambda
+failed with a masked message; the human watches the same trace as a
+sequence diagram.
 
 ## 6. Architecture
 
-```
-┌─ dashboard pane (plugin pane, placement=tab) ────────┐
-│  dashr herdr pane dashboard                          │
-│   ├─ owns: Grafana container (tmpfs, loopback)       │
-│   ├─ runs: terminal-browser open <kiosk url>         │
-│   │        (or the text status view)                 │
-│   └─ loop: panel health → $dashr token; watches      │
-├─ chat pane (split below) ────────────────────────────┤
-│  claude --mcp-config <runtime>/mcp.json              │
-│   └─ dashr mcp --session <id>  (masking boundary)    │
-└──────────────────────────────────────────────────────┘
+```text
+ the human's AI session (any pane)            the dashr pane (Herdr) / `dashr serve`
+ ┌───────────────────────────┐   HTTP+token   ┌────────────────────────────────────────────┐
+ │ dashr flow/source/trace … │ ─────────────▶ │ session API (masked)   viewer (raw) ◀── browser
+ └───────────────────────────┘                │   │ trace store ◀── poller ◀── Jaeger query API
+                                              │   │      ▲                      ▲
+ local services ── OTLP gRPC/HTTP ────────────┼───┼──────┼──────▶ Jaeger container (loopback,
+                                              │   │   pull sources (commands:     read-only,
+ AWS X-Ray / Azure / GCP / Jaeger / Zipkin ◀──┼───┼── aws, az, gcloud, curl)      in-memory)
+                                              │   └── flows: review + verdicts      ▲
+                                              │        pulled spans ── OTLP/JSON ──┘
+                                              └────────────────────────────────────────────┘
 ```
 
-Crates:
-
-| Crate | Responsibility |
-|---|---|
-| `dashr-core` | Configuration, provisioning, masking, dashboard validation, frames, watches, session files. Pure. |
-| `dashr-grafana` | Blocking client for Grafana's HTTP API. |
-| `dashr-docker` | Container argv, lifecycle and orphan detection via the `docker` CLI. |
-| `dashr-herdr` | Manifest generation, plugin environment, `herdr` CLI wrapper. |
-| `dashr-aws` | CodePipeline URL parsing, discovery via the `aws` CLI, first-dashboard proposal. |
-| `dashr-runtime` | Session start/stop, apply, panel status, browser control, monitor tick, promote, OTLP export and `dashr tail`, log expectations. |
-| `dashr-mcp` | MCP stdio server and the agent's tools. |
-| `dashr-cli` | The `dashr` binary: Herdr entrypoints and standalone commands. |
+- `dashr-core`: the span model, converters for every supported format, the
+  trace store, flows and verdicts, sequence derivation, masking. No I/O.
+- `dashr-runtime`: the Jaeger container, the poller, pull sources, the
+  session API and viewer, session records.
+- `dashr-herdr`: the plugin manifest and the Herdr CLI wrapper.
+- `dashr-cli`: the `dashr` binary: the pane, `serve`, and the agent's commands.
 
 ## 7. Scope and milestones
 
-| Milestone | Content |
-|---|---|
-| M0 | PRD, CI, governance. |
-| M1 | Libraries: core, Grafana client, Docker lifecycle, Herdr wrapper, AWS bootstrap, runtime, MCP server. |
-| M2 | `dashr` binary and Herdr wiring: manifest, actions, panes, hooks, install. |
-| M3 | End-to-end suite against real Herdr and Grafana in CI; releases. |
-| M4 | Agent skill for dynamic dashboard building. |
-| M5 | OpenTelemetry mode, live log checks, saved dashboards. The whole of M0-M5 ships as the single public release v0.1.0 (DEC-037). |
+| Milestone | Content | Status |
+|---|---|---|
+| 2.0 | Everything in section 8 | Delivered |
+| Later | A session per test environment shared by a team; traces exported for bug reports; more formats (Datadog, Honeycomb) as converters | Not started |
 
 ## 8. Functional requirements
 
-### 8.1 Herdr plugin (HERDR)
+### 8.1 Session (SESSION)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-HERDR-001 | `herdr-plugin.toml` is generated from code and a test fails when the checked-in file differs. | Must | Verified | `crates/dashr-cli/tests/plugin_manifest.rs` |
-| DASHR-HERDR-002 | Action `open` opens a new tab: dashboard pane on top, chat pane split below; if the chat pane cannot be opened or recorded, the text view says why. | Must | Verified | AC-OPEN in `scripts/e2e/run.sh` |
-| DASHR-HERDR-003 | A link handler routes Ctrl-clicked CodePipeline console URLs to action `pipeline`, which opens a bootstrapped dashboard. | Must | Verified | AC-PIPELINE in `scripts/e2e/run.sh`; `link_pattern_matches_both_consoles` |
-| DASHR-HERDR-004 | A startup hook stops dashr containers of this Herdr server whose pane no longer exists. | Must | Verified | Startup reaper scenario in `scripts/e2e/run.sh` |
-| DASHR-HERDR-005 | A `pane.closed` event hook stops the closed pane's container and deletes its runtime files. | Must | Verified | `herdr_cmds::pane_closed`; AC-CLOSE in `scripts/e2e/run.sh` |
-| DASHR-HERDR-006 | Installing needs no Rust toolchain and no shell: the build step runs `npm install --prefix . --no-save herdr-dashr@<version>` (through `cmd /c` on Windows; `--prefix .` because npm otherwise installs into the first parent directory with a `package.json`, such as the home directory), pinned to the manifest version, and every entry point runs `node node_modules/herdr-dashr/bin.js`, as herdr-remote-channel does (DEC-038). | Must | Implemented | `installs_from_npm_on_every_platform_including_windows`; e2e runs every Herdr entry point through the launcher (`scripts/e2e/run.sh`); v0.1.1 on npm and a real Windows install pending |
-| DASHR-HERDR-007 | The dashboard pane reports a `$dashr` sidebar token summarising panel health (e.g. `6 ok · 1 err`). | Should | Verified | AC-OPEN asserts the `$dashr` token in `scripts/e2e/run.sh` |
-| DASHR-HERDR-008 | The plugin declares and supports Linux, macOS and Windows. | Must | Implemented | Manifest `platforms`; unit tests on all three in `.github/workflows/build-and-test.yml` (Windows also run under Wine before merging); e2e on Linux; a real Windows install pending |
-| DASHR-HERDR-009 | A `doctor` action checks Docker, Herdr, terminal-browser, the agent CLI and the AWS CLI and says what is missing. | Should | Verified | Doctor scenario in `scripts/e2e/run.sh`; `reports_missing_tools_with_hints` |
-| DASHR-HERDR-010 | A dashboard pane the human's AI session opens itself (`herdr plugin pane open --plugin herdr-dashr --entrypoint dashboard`, split beside it) opens no chat pane: that session drives it. Only the Herdr actions open a chat pane with its own agent. The pane writes the briefing `dashr wait` hands the session. | Must | Verified | AC-AGENT in `scripts/e2e/run.sh` |
-| DASHR-HERDR-011 | Installing the plugin also installs the `dashr` command globally at the plugin's own version (`dashr global install --best-effort`, which runs `npm install -g herdr-dashr@<version>`, through `cmd /c` on Windows), so the human's AI session can run it without a manual step. A failed global install is reported with the command to run by hand, and never fails the plugin install. | Must | Implemented | `herdr-plugin.toml` build step; `installs_this_version_through_cmd_on_windows`, `installs_from_npm_on_every_platform_including_windows`; best-effort path checked by hand; awaiting a real install |
+| DASHR-SESSION-001 | A session runs one Jaeger all-in-one container (in-memory storage) receiving OTLP over gRPC (4317) and HTTP (4318) and serving its UI and query API (16686). It is read-only, has every capability dropped, no-new-privileges, no logging driver, self-tracing off, a memory limit, and its ports are published on `127.0.0.1` unless `[jaeger] bind` says otherwise. The standard ports are used when free, so SDKs need no endpoint setting; free ports otherwise. | Must | Verified | `the_container_is_locked_down_and_on_loopback`; AC-SESSION |
+| DASHR-SESSION-002 | A session writes an owner-only record (session id, Herdr pane, API port, agent token, Jaeger ports) to the state directory and removes it when it ends. `dashr` commands find the session by `--session` (id or pane id), `DASHR_SESSION`, or the one that answers. | Must | Verified | `records_are_found_by_id_pane_or_liveness`; AC-SESSION |
+| DASHR-SESSION-003 | The session serves, on loopback, an API for `dashr` commands (agent token, masked answers) and a viewer for the human (its own token in the link's fragment, raw values). Neither answers without its token. | Must | Verified | `crates/dashr-runtime/src/api.rs`; AC-SESSION |
+| DASHR-SESSION-004 | The pane reads every trace Jaeger received (polling its query API every 1.5 s over a configurable lookback) into the session's trace store. | Must | Verified | `Shared::poll_jaeger`; AC-OTLP |
+| DASHR-SESSION-005 | `dashr doctor` checks the configuration, Docker, the Jaeger image, Herdr, and the AWS, Azure and Google Cloud CLIs, and fails only on required checks. | Should | Verified | `crates/dashr-cli/src/doctor.rs`; AC-DOCTOR |
+| DASHR-SESSION-006 | Closing the pane (or stopping `dashr serve`) removes the container, and with it every span, and the record. A session killed without cleanup is removed by the Herdr startup hook; on Windows the `pane.closed` hook stops the container. | Must | Verified | `reap`; AC-REAP, AC-HERDR |
 
-### 8.2 Grafana lifecycle (GRAF)
+### 8.2 Traces (TRACE)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-GRAF-001 | One container per pane, named `herdr-grafana-<session>`, labelled with owner, pane, socket hash and session, bound to a random loopback port. | Must | Verified | AC-OPEN `docker inspect` assertions in `scripts/e2e/run.sh` |
-| DASHR-GRAF-002 | The plain Grafana container stores nothing (OpenTelemetry mode: DASHR-OTEL-001): `--read-only`, tmpfs for `/var/lib/grafana`, `/tmp`, `/var/log/grafana`, `--log-driver none`, `--memory-swap` equal to `--memory`, all capabilities dropped. | Must | Verified | AC-OPEN `docker inspect` assertions in `scripts/e2e/run.sh` |
-| DASHR-GRAF-003 | Anonymous admin, login form disabled, analytics, update checks and news disabled. | Must | Verified | `RunSpec::grafana_env`; AC-OPEN (anonymous API access) |
-| DASHR-GRAF-004 | Runtime files live in a 0700 directory on a memory-backed file system where one exists, and are deleted on stop. | Must | Verified | AC-CLOSE; browser-pane scenario asserts a memory-backed, per-user runtime dir (DEC-026) |
-| DASHR-GRAF-005 | Start waits for `/api/health` with a bounded timeout and cleans up on failure; a missing Docker is a clear error. | Must | Verified | `start_fails_cleanly_without_docker`, `unreachable_and_timeout` |
-| DASHR-GRAF-006 | The pane stops its container on normal exit and on SIGINT, SIGTERM and SIGHUP (Herdr sends SIGHUP on pane close). | Must | Verified | AC-CLOSE (pane close sends SIGHUP) in `scripts/e2e/run.sh` |
-| DASHR-GRAF-007 | The image is pinned (`grafana/grafana:12.1.1`); `dashr image build` produces a custom image with Infinity and Zabbix plugins installed outside the tmpfs path. | Must | Verified | Custom-image scenario in `scripts/e2e/run.sh` (Infinity loaded from outside the tmpfs) |
-| DASHR-GRAF-008 | A session record (ids, port, uid, datasource policies) is written to the plugin state directory, holds no secret or data value, and is removed on stop. | Must | Verified | `session::tests::records_hold_no_secret_shaped_fields`, `round_trips_lists_and_removes`. |
-| DASHR-GRAF-009 | dashr keeps its state (sessions, watches, saved dashboards) in its own directory, not Herdr's plugin state directory: `DASHR_STATE_DIR`, else `%APPDATA%\\herdr-dashr\\state` on Windows, `$XDG_STATE_HOME/herdr-dashr`, `~/Library/Application Support/herdr-dashr` on macOS, or `~/.local/state/herdr-dashr`. The pane and every `dashr` command, including the AI session's, see the same sessions. | Must | Verified | `dashr_runtime::paths`; AC-AGENT in `scripts/e2e/run.sh` runs `dashr` without Herdr's plugin variables |
-| DASHR-GRAF-010 | A pane process whose pane is gone stops Grafana, deletes its files and exits within two monitor ticks, even though nothing signalled it. On Windows, closing a pane kills the `node` launcher and leaves `dashr.exe` running, which held the plugin's files (uninstall failed with OS error 32) and kept the container up. | Must | Verified | Watchdog scenario in `scripts/e2e/run.sh` (pane process run outside its pane, never signalled) |
+| DASHR-TRACE-001 | Spans from any source share one model: W3C trace and span ids, service, kind, times, status and message, attributes, resource, events, links, source. | Must | Verified | `crates/dashr-core/src/model.rs` |
+| DASHR-TRACE-002 | dashr reads OTLP/JSON (also Tempo's `batches`), OTLP/protobuf, AWS X-Ray (`batch-get-traces` output and segment documents, subsegments as nested spans, `aws`/`remote` subsegments as client calls), Zipkin v2, Jaeger query JSON, Azure Application Insights and Log Analytics query results, and Google Cloud Trace v1, recognising the format by shape when not named. X-Ray, Zipkin and Application Insights ids become W3C ids, so a trace that crosses systems is one trace. | Must | Verified | `crates/dashr-core/src/ingest/`; `a_step_function_execution_becomes_one_trace`; AC-SOURCE, AC-FORMATS |
+| DASHR-TRACE-003 | The trace store groups spans by trace, keeps one copy per span (a later copy replaces an earlier one, except that Jaeger's echo of a pulled span never replaces it), counts orphans (spans whose parent never arrived), and drops the least recently updated traces past 2,000. | Must | Verified | `spans_group_into_traces_and_later_copies_replace_earlier_ones`, `jaeger_echoes_do_not_replace_pulled_spans` |
+| DASHR-TRACE-004 | `dashr traces` lists recent traces (filters: window, service, span name, attributes, errors) and `dashr trace <id>` shows one as a masked text sequence, or every masked span with `--json`. | Must | Verified | `crates/dashr-cli/src/agent.rs`; AC-OTLP, AC-MASK |
 
-### 8.3 Datasources (DS)
+### 8.3 Pull sources (SOURCE)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-DS-001 | A TestData datasource is always provisioned and flagged non-personal. | Must | Verified | `provisioning::tests::default_config_provisions_only_testdata`. |
-| DASHR-DS-002 | Prometheus, Loki, Tempo, CloudWatch, SQL Server, Azure Monitor, Zabbix and Seq (via Infinity) are provisioned from `dashr.toml`. | Must | Verified | `provisioning::tests::every_kind_maps_to_its_plugin`. |
-| DASHR-DS-003 | Secrets are `$__env{NAME}` references in provisioning and reach the container as `-e NAME`; values never appear in files or argv, and configuration rejects values in place of names. | Must | Verified | `secrets_are_env_references_never_values`, `secrets_are_passed_by_name_only`, `secret_env_must_be_a_name_not_a_value`. |
-| DASHR-DS-004 | CloudWatch receives short-lived credentials exported by `aws configure export-credentials`, falling back to credentials already in the environment. | Must | Verified | AC-PIPELINE asserts exported credentials in the container env (`scripts/e2e/run.sh`) |
-| DASHR-DS-005 | Every datasource carries a `personal` flag, defaulting to true. | Must | Verified | `config::tests::example_configuration_parses`. |
-| DASHR-DS-006 | Loopback datasource URLs are rewritten to `host.docker.internal`, with a host-gateway mapping on Linux. | Must | Verified | `loopback_urls_are_rewritten_and_others_kept`, `run_args_store_nothing_and_bind_loopback`. |
+| DASHR-SOURCE-001 | `dashr source add <name> --format F --every N -- <command>` runs a command (through `cmd /c` on Windows) every N seconds (at least 5) with the window to read in `DASHR_SINCE`/`DASHR_UNTIL` (seconds, `_MS`, `_ISO`), re-reading two minutes before the previous run for late spans, and converts what it prints. Several documents in a row and JSON lines are accepted; printing nothing is fine. | Must | Verified | `Shared::add_source`, `Shared::run_source`; AC-SOURCE |
+| DASHR-SOURCE-002 | A source is tried once when added. The trial reports span, trace and service counts — never values — and a failing trial is refused with the command's last stderr line (masked), unless `--keep-on-error`. `dashr source list` shows each source's health; `rm` stops it. | Must | Verified | AC-SOURCE |
+| DASHR-SOURCE-003 | Pulled spans are kept in the store and sent on to the session's Jaeger over OTLP/JSON, so Jaeger's UI shows the joined trace too. `dashr ingest <file or ->` imports once. | Must | Verified | `encoding_round_trips`; AC-SOURCE, AC-FORMATS |
 
-### 8.4 Browser pane (VIEW)
+### 8.4 Flows (FLOW)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-VIEW-001 | The dashboard pane is a narrow column on the right. Opened beside another pane, it narrows itself to a fifth of the split. It shows the link to its dashboard-only page (`http://127.0.0.1:<port>/`) on one line, one line of panel health, breached alerts, and in OpenTelemetry mode the OTLP endpoint. There is no per-panel list and no browser inside the pane (DEC-040). | Must | Verified | `status_shows_the_link_and_one_health_line_only`, `a_right_hand_pane_is_narrowed_to_a_fifth`; AC-OPEN pane assertions and AC-AGENT width check in `scripts/e2e/run.sh` |
-| DASHR-VIEW-002 | The human opens the link in their own browser. The page follows every dashboard the agent applies within about two seconds (it reloads the dashboard when the saved version changes, without reloading itself), and the dashboard refreshes its data at its own interval (DEC-034). | Must | Verified | Chrome scenario in `scripts/e2e/run.sh`: a real Chrome opens the pane's link, shows the agent's change while the page itself stays loaded, and a new log line appears by itself |
-| DASHR-VIEW-003 | No browser is bundled or required. terminal-browser, which has no Windows build and no public license, is no longer used by the pane or checked by the doctor. | Must | Verified | `crates/dashr-cli/src/pane.rs` and `doctor.rs`; CI installs no terminal-browser and the Chrome scenario passes |
-| DASHR-VIEW-004 | Log-check tiles on the page count from the moment of arming: arming sets the dashboard's time range, and the page reloads the dashboard after every change. | Should | Verified | Chrome scenario in `scripts/e2e/run.sh` (tiles `waiting`, then the highlighted trail) |
-| DASHR-VIEW-005 | The page shows only the dashboard: Grafana's shared ("public") dashboard view fills it, so there are no Grafana menus, search, edit, share, sign-in or admin pages, and Esc does not lead out to them (kiosk mode would) (DEC-041). If Grafana refuses to share the dashboard, the pane falls back to the kiosk link and says so. | Must | Verified | `viewer::tests`; Chrome scenario in `scripts/e2e/run.sh` finds none of Grafana's menu words |
+| DASHR-FLOW-001 | A flow is JSON: name, description, a selector (attributes any span carries, a root-name glob), order (sequence or any), and steps — service and span globs, kind, expected attributes (value, `*` present, `!` absent, `re:` regex), expected error, optional, count bounds, time budget, `code` and `why` for review — plus forbidden spans, `no_errors`, a trace budget and `settle_secs`. Invalid flows are refused with the reason. | Must | Verified | `invalid_flows_are_refused_with_a_reason`; `.agents/skills/herdr-dashr/reference/flows.md` |
+| DASHR-FLOW-002 | A new or changed flow waits for the human's review. The viewer shows its steps, code locations and reasons, and offers Approve and Request changes with a comment. `dashr flow wait --review` returns the decision and comment (exit 0 approved, 3 changes requested, 4 timeout). | Must | Verified | AC-FLOW, AC-VIEW |
+| DASHR-FLOW-003 | Every trace updated since the flow was armed (`flow set` or `flow arm`) and started no earlier than five seconds before is matched against it; the best match (most steps met, then newest) is the verdict: per step `ok`, `skipped`, `missing`, `out_of_order`, `mismatch`, `error` or `slow` with problems, plus unexpected error spans and forbidden spans. An error or forbidden span fails it at once; otherwise it passes when every step is met and fails when the trace has been quiet for `settle_secs` without. | Must | Verified | `a_trace_that_does_what_the_flow_says_passes`, `errors_retries_forbidden_spans_and_order_fail`; AC-VIEW |
+| DASHR-FLOW-004 | Expected values are compared against raw values inside dashr; the verdict shows the expected value as written and the actual value masked. | Must | Verified | `wrong_values_are_reported_masked`; AC-VIEW |
+| DASHR-FLOW-005 | `dashr flow wait <name>` waits for a decided verdict and prints it with the trace's sequence (exit 0 pass, 1 fail, 4 timeout with the current state). | Must | Verified | AC-VIEW |
 
-### 8.5 Chat pane (CHAT)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-CHAT-001 | The chat pane runs the configured agent command with a generated MCP config naming `dashr mcp --session <id>`; `mcp-grafana` is added only when opted in. | Must | Verified | AC-OPEN chat-pane assertions; `mcp_config_names_the_session_and_paths` |
-| DASHR-CHAT-002 | The agent receives the privacy rules as MCP server instructions and an agent skill. | Must | Verified | AC-MASK asserts the privacy rules in `initialize` instructions (`scripts/e2e/run.sh`); `.agents/skills/herdr-dashr/SKILL.md` |
-| DASHR-CHAT-003 | The agent command is typed into the pane's shell with every argument POSIX-quoted. | Must | Verified | `agent_argv_substitutes_placeholders`; AC-OPEN |
-
-### 8.6 MCP server (MCP)
+### 8.5 Viewer (VIEW)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-MCP-001 | Stdio MCP server: `initialize` (version negotiation), `ping`, `tools/list`, `tools/call`, JSON-RPC errors. | Must | Verified | `protocol::tests::full_handshake_and_call`, `protocol::tests::errors`. |
-| DASHR-MCP-002 | `list_datasources` returns uid, name, type and personal flag only. | Must | Verified | AC-MASK in `scripts/e2e/run.sh` |
-| DASHR-MCP-003 | `apply_dashboard` validates structure and datasource references, pins uid/refresh/tag, saves and reloads. | Must | Verified | AC-MASK (valid and invalid dashboards) in `scripts/e2e/run.sh` |
-| DASHR-MCP-004 | `panel_status` reports per-panel state, rows, fields and masked errors, never values. | Must | Verified | AC-MASK in `scripts/e2e/run.sh` |
-| DASHR-MCP-005 | `panel_data_sample` and `probe_query` return masked rows with real field names and types, capped by `masking.max_rows`. | Must | Verified | AC-MASK in `scripts/e2e/run.sh` |
-| DASHR-MCP-006 | `get_dashboard` returns the current dashboard JSON. | Should | Verified | Promote scenario in `scripts/e2e/run.sh` |
-| DASHR-MCP-007 | `open_for_pipeline` bootstraps from a CodePipeline URL, or opens a new dashboard tab when the region lacks CloudWatch. | Should | Verified | AC-PIPELINE `open_for_pipeline` step in `scripts/e2e/run.sh` |
-| DASHR-MCP-008 | `promote` copies the dashboard to a configured persistent Grafana. | Should | Verified | Promote scenario in `scripts/e2e/run.sh` |
-| DASHR-MCP-009 | `watch_panel`, `list_watches` and `remove_watch` manage local alert rules. | Should | Verified | AC-ALERT in `scripts/e2e/run.sh`; `watches_are_managed_through_the_store` |
-| DASHR-MCP-010 | `screenshot` is refused unless every datasource the dashboard uses is non-personal. | Must | Verified | `screenshots_only_for_non_personal_dashboards`; AC-MASK (refused) and the browser-pane scenario (PNG returned) |
-| DASHR-MCP-011 | `dashr tool <name>` calls any dashr tool through the MCP server's own implementation and prints its JSON. It masks with the configuration of the pane that owns the session, and names the session by id or by dashboard pane id. `dashr wait` blocks until the pane's Grafana runs, then prints the session and briefing, never Grafana's address. | Must | Verified | `agent::tests`; AC-AGENT in `scripts/e2e/run.sh` (planted values never returned) |
+| DASHR-VIEW-001 | The pane shows the viewer link (Ctrl-click), the Jaeger UI link, the OTLP endpoints, trace and span counts, one line per flow (waiting for review, pass, fail) and per source. | Must | Verified | `crates/dashr-cli/src/pane.rs`; AC-HERDR |
+| DASHR-VIEW-002 | The viewer draws the selected trace live as a sequence diagram: participants are services (plus `caller`, `?` for lost parents, and the peers client spans call that send no spans — databases, queues, AWS services); calls with activation bars and dashed returns carrying the duration, self-messages for internal spans (can be hidden), asynchronous producer/consumer arrows, errors in red, flow steps marked on their spans. | Must | Verified | `spans_become_calls_self_messages_and_peers`; AC-VIEW |
+| DASHR-VIEW-003 | The viewer also shows a waterfall, the trace list (newest first, followed by default), sources' health, span details on click (raw), and a link to the trace in Jaeger. | Should | Verified | `crates/dashr-runtime/assets/viewer.html`; AC-VIEW |
+| DASHR-VIEW-004 | The agent gets the same sequence as text: offsets, nesting, arrows, durations, errors with masked messages, masked attributes. | Must | Verified | `text_for_the_agent_is_masked`; AC-OTLP |
 
-### 8.7 Privacy and masking (PRIV)
+### 8.6 Agent integration (AGENT)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-PRIV-001 | Fields whose names contain personal tokens are redacted; values in other string fields pass through detectors for email, IBAN (mod-97), card (Luhn), phone, IPv4/IPv6, JWT, AWS keys, bearer tokens and credential assignments. | Must | Verified | `masking::tests::detectors_scrub_free_text`, `personal_fields_are_redacted_with_stable_pseudonyms`. |
-| DASHR-PRIV-002 | Replacements are stable pseudonyms within one response. | Must | Verified | `personal_fields_are_redacted_with_stable_pseudonyms`. |
-| DASHR-PRIV-003 | Global and per-datasource allow-lists pass named fields; secret-named fields are never allow-listed. | Must | Verified | `allow_lists_apply_but_never_to_secrets`. |
-| DASHR-PRIV-004 | Numbers, booleans and timestamps pass unless the field is redacted; ids and dates are not mistaken for phones. | Must | Verified | `ordinary_numbers_in_text_are_not_phones`. |
-| DASHR-PRIV-005 | Non-personal datasources skip field-name redaction and the low-confidence detectors (IP, phone); secret, email, IBAN and card detectors always run. | Must | Verified | `secrets_are_masked_even_on_non_personal_datasources`; DEC-017 |
-| DASHR-PRIV-006 | Strings are truncated, rows capped, labels and nested values masked, and values without a field description replaced. | Must | Verified | `rows_are_capped_and_long_strings_truncated`, `labels_are_masked_by_key_and_value`, `values_without_field_descriptions_are_not_trusted`. |
-| DASHR-PRIV-007 | Users add patterns and deny tokens in configuration; invalid patterns are rejected. | Should | Verified | `extra_patterns_apply`, `config::Config::validate`. |
+| DASHR-AGENT-001 | `dashr wait` waits for a session (by pane id) and prints its endpoints and the `OTEL_*` environment; `dashr env` prints that environment for sh, PowerShell, cmd or JSON. | Must | Verified | AC-SESSION, AC-HERDR |
+| DASHR-AGENT-002 | Every command answers JSON (the trace sequence as text), errors on stderr, with documented exit codes (0, 1 failed, 2 usage, 3 changes requested, 4 timeout, 5 error). | Must | Verified | `the_command_line_parses`; AC-FLOW |
+| DASHR-AGENT-003 | The agent skill, installed for every coding agent by the plugin's build step, teaches the workflow — open the pane, check prerequisites and ask the human for what is missing, instrument, write and review the flow, connect sources, arm, run, judge — with references on instrumenting per language and platform, flows, and pull-source recipes for X-Ray, Application Insights, Log Analytics, Cloud Trace, Jaeger, Tempo and Zipkin. | Must | Implemented | `.agents/skills/herdr-dashr/SKILL.md`, `reference/instrumenting.md`, `reference/flows.md`, `reference/sources.md` |
 
-### 8.8 CodePipeline bootstrap (AWS)
+### 8.7 Herdr integration (HERDR)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-AWS-001 | New-console, execution and old-console URLs parse to region, pipeline and execution; anything else is refused. | Must | Verified | `url::tests::*`. |
-| DASHR-AWS-002 | CloudFormation deploy actions yield stack names (once per stack and region); other deploy providers produce a warning. | Must | Verified | `finds_cloudformation_stacks_once_each`. |
-| DASHR-AWS-003 | Stack resources classify into log groups, queues (DLQ detection), state machines and Lambdas, following nested stacks. | Must | Verified | `classifies_resources`, `discover_follows_nested_stacks_through_a_fake_cli`. |
-| DASHR-AWS-004 | A first dashboard is proposed: stage table, error logs, queue depth/age, DLQ stat, Step Functions and Lambda metrics; it validates and has no overlapping panels. | Must | Verified | AC-PIPELINE; `every_resource_kind_gets_panels_with_valid_queries` |
-| DASHR-AWS-005 | Resource names are infrastructure metadata and are returned unmasked; error text from AWS is masked. | Should | Verified | `classifies_resources` (names returned as-is); `session::start` masks bootstrap errors with `Masker::mask_text` |
-| DASHR-AWS-006 | AWS is reached only through the `aws` CLI; dashr holds no AWS credentials of its own beyond passing exported ones to the container. | Must | Verified | `discover_follows_nested_stacks_through_a_fake_cli`, `credentials_keep_only_known_variables` |
+| DASHR-HERDR-001 | `herdr-plugin.toml` is generated from code and checked against the generator in CI. | Must | Verified | `checked_in_manifest_matches_the_generator` |
+| DASHR-HERDR-002 | The plugin declares the `traces` pane (a split the agent opens beside itself, narrowed to a column), the `doctor` popup, the `open` action (a trace pane beside the focused pane), `doctor`, the startup hook and the `pane.closed` event. | Must | Verified | `renders_every_entrypoint`; AC-HERDR |
+| DASHR-HERDR-003 | The pane reports itself blocked to Herdr while a flow waits for the human's review, and notifies once per decided verdict. | Should | Implemented | `crates/dashr-cli/src/pane.rs` |
+| DASHR-HERDR-004 | Installing needs no Rust toolchain: the build step installs `herdr-dashr@<version>` from npm into the plugin checkout (`--prefix .`, through `cmd /c` on Windows), puts `dashr` on PATH best-effort, and installs the agent skill; entry points run `node node_modules/herdr-dashr/bin.js`. | Must | Verified | `installs_from_npm_on_every_platform_including_windows`; AC-LAUNCHER |
+| DASHR-HERDR-005 | A pane whose Herdr pane is gone without a signal (Windows) stops itself after three missed checks. | Should | Implemented | `PANE_GONE_AFTER` |
 
-### 8.9 Alerts (ALERT)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-ALERT-001 | Watch rules are evaluated by the dashboard pane against real values; values never leave the pane. | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
-| DASHR-ALERT-002 | A new breach marks the dashboard pane blocked with the rule wording (no values). | Must | Verified | AC-ALERT in `scripts/e2e/run.sh` |
-| DASHR-ALERT-003 | A new breach raises one Herdr notification when `monitor.notify` is on. | Should | Verified | `a_new_breach_blocks_and_notifies_once` |
-| DASHR-ALERT-004 | When every breach clears, the pane returns to idle. | Should | Verified | Watch-removal scenario in `scripts/e2e/run.sh`; `clearing_the_last_breach_returns_to_idle` |
-| DASHR-ALERT-005 | A watch has a severity: `alert` (default) blocks the pane, `info` only notifies. A panel that returns no data keeps its watch's state instead of clearing it and notifying again (DEC-032). | Should | Verified | `an_info_watch_notifies_without_blocking`, `no_data_keeps_a_rule_as_it_was`; AC-LOGX in `scripts/e2e/run.sh` |
-
-### 8.10 Promote (PROMO)
+### 8.8 Technology and governance (TECH, GOV)
 
 | ID | Requirement | Priority | Status | Evidence |
 |---|---|---|---|---|
-| DASHR-PROMO-001 | Promotion saves into a folder (created when missing) without overwriting. | Should | Verified | Promote scenario against a second real Grafana in `scripts/e2e/run.sh` |
-| DASHR-PROMO-002 | Datasources are remapped by name; missing ones are listed and nothing is saved. | Should | Verified | Promote scenario (missing Loki refused; TestData uid remapped) in `scripts/e2e/run.sh` |
-| DASHR-PROMO-003 | The token comes from the environment variable named in configuration, travels only in a header and never appears in debug output. | Must | Verified | `token_goes_in_a_header_and_never_in_debug_output`; promote scenario asserts the token never appears in tool output |
-
-### 8.11 Governance and implementation (GOV, TECH)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-GOV-001 | Every pull request updates this PRD and its ledger, enforced by `PRD traceability`. | Must | Verified | `.github/workflows/prd-traceability.yml` passed on every PR since #7 |
-| DASHR-GOV-002 | Pull requests follow `.github/pull_request_template.md`. | Must | Verified | `.github/pull_request_template.md` |
-| DASHR-GOV-003 | A `Verified` row must cite evidence. | Must | Verified | `.github/scripts/check-prd-traceability.ps1` |
-| DASHR-TECH-001 | Rust workspace, edition 2024, pinned toolchain, `unsafe_code` forbidden, clippy denied. | Must | Verified | `Cargo.toml`, `rust-toolchain.toml`. |
-| DASHR-TECH-002 | CI runs format, clippy and tests on Linux and macOS behind one `Build and test` check. | Must | Verified | `.github/workflows/build-and-test.yml` |
-| DASHR-TECH-003 | CI runs an end-to-end suite against a real Herdr server and a real Grafana container. | Must | Verified | `.github/workflows/end-to-end.yml`, `scripts/e2e/run.sh` |
-| DASHR-TECH-004 | Releases publish Linux, macOS and Windows binaries with SHA-256 checksums (`.tar.gz`, `.zip` for Windows). | Must | Implemented | `.github/workflows/release.yml`: 5 targets including `x86_64-pc-windows-msvc`; `release_packaging_shim_and_installer_list_the_same_platforms`; v0.1.1 pending |
-| DASHR-TECH-005 | Every release is published to npm as `herdr-dashr` plus one package per platform (five; Windows as `@czinegeroland/herdr-dashr-win32-x64`, because npm's spam filter refused the unscoped name) (`os`/`cpu`-constrained, no postinstall), built only from archives that match their published SHA-256 and only when every platform is present; the plugin installer and `npx herdr-dashr` use it. | Should | Implemented | v0.1.0 published with four platform packages by `.github/workflows/npm-publish.yml`; `scripts/build-npm-packages.mjs` packs the Windows `.zip` as `@czinegeroland/herdr-dashr-win32-x64`; `crates/dashr-cli/tests/distribution.rs`; v0.1.1: the four Unix packages are published, and the scoped Windows package plus `herdr-dashr` 0.1.1 follow from a re-run of Publish to npm |
-
-### 8.12 Agent skill (SKILL)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-SKILL-001 | The plugin ships a dashboard-building agent skill — the loop from question to verified dashboard, privacy rules, dashboard JSON, query models for every supported datasource, debugging recipes — embedded in the binary. | Must | Verified | `.agents/skills/herdr-dashr/`; `dashr_runtime::skill::FILES`; `skill_carries_the_marker_and_frontmatter` |
-| DASHR-SKILL-002 | The plugin's build step installs the skill with `npx skills add czinegeroland/herdr-dashr --skill herdr-dashr --global` (through `cmd /c` on Windows), for every coding agent `skills` detects on the machine: one copy in `~/.agents/skills`, read by Codex, Amp, Cline and others, and linked into Claude Code. `dashr skill install` installs the embedded copy, never replaces a skill dashr did not write, and never fails when `--best-effort` is given. | Must | Implemented | `herdr-plugin.toml` build steps; `installs_from_npm_on_every_platform_including_windows`; in a manual check with Claude Code and Codex present, `skills add` installed into `~/.agents/skills/herdr-dashr` and linked `~/.claude/skills/herdr-dashr` (exit 0); skill scenario in `scripts/e2e/run.sh` for `dashr skill install` |
-| DASHR-SKILL-003 | The same guide is served as MCP resources (`dashr://guide/...`) and named in the server instructions, so agents without skill support get it too. | Should | Verified | `resources_are_listed_and_read`, `resources_map_to_files`; skill scenario in `scripts/e2e/run.sh` |
-| DASHR-SKILL-005 | The skill covers OpenTelemetry sessions and log checks: the endpoint, `dashr tail`, the expectation tools, pattern rules and LogQL/TraceQL/PromQL for OTel data. | Should | Verified | `.agents/skills/herdr-dashr/reference/otel-and-logs.md`; skill scenario in `scripts/e2e/run.sh` (five resources) |
-| DASHR-SKILL-004 | Every example dashboard and query-model snippet in the skill is valid: examples pass dashr's validation, snippets parse, and the TestData example renders with every panel `ok` on a real Grafana. | Must | Verified | `every_dashboard_example_is_valid`, `every_query_model_snippet_is_json`; skill scenario in `scripts/e2e/run.sh` |
-| DASHR-SKILL-006 | The skill makes the human's own AI session the dashboard builder. It opens the dashboard pane beside itself (for a pasted CodePipeline link, for OpenTelemetry, or plain), waits for it, and builds with `dashr tool`, installing `dashr` with npm when it is missing. The human never leaves the conversation or opens a menu. | Must | Implemented | `.agents/skills/herdr-dashr/SKILL.md`; AC-AGENT runs the skill's commands; awaiting a real install |
-
-### 8.13 OpenTelemetry (OTEL)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-OTEL-001 | OpenTelemetry mode (`[otel] enabled`, the `otel` action or `dashr session start --otel`) runs exactly one container per pane — `grafana/otel-lgtm` with Grafana, an OpenTelemetry collector, Loki, Tempo and Prometheus — with the plain Grafana's hardening except storage: logs, traces and metrics are kept on disk in anonymous volumes deleted with the container (DEC-033); Grafana and OTLP (gRPC 4317, HTTP 4318) on loopback only. The pane is ready only when the collector accepts OTLP. | Must | Verified | `otel_flavor_is_one_hardened_container_receiving_otlp_on_loopback`; AC-OTEL in `scripts/e2e/run.sh` (`docker inspect`, one container per session, volumes removed on close) |
-| DASHR-OTEL-002 | dashr knows the image's datasources and how to mask them: Loki and Tempo personal (resource and severity labels allowed), Prometheus and Pyroscope not. Configured datasources may not reuse their uids: the configuration is refused, and when OpenTelemetry mode is switched on after loading it (the action, `--otel`) such a datasource is left out with a warning (DEC-036). | Must | Verified | `otel_mode_adds_the_image_datasources_to_the_policies_only`, `otel_mode_reserves_its_datasource_uids`, `otel_mode_skips_configured_datasources_that_reuse_the_image_uids`; AC-OTEL masked log sample |
-| DASHR-OTEL-003 | The endpoint is announced where it is needed: the session record, the text view, `OTEL_EXPORTER_OTLP_ENDPOINT` in the chat pane, the agent's opening prompt, the `session_info` tool and a welcome dashboard (endpoint, all logs, recent traces). | Must | Verified | `otel_welcome_validates_against_the_otel_datasources`; AC-OTEL text-view and chat-pane checks in `scripts/e2e/run.sh` |
-| DASHR-OTEL-004 | `dashr tail [--service] -- <command>` (or stdin) ships every stdout and stderr line to the session as OTLP logs with `service.name`, the stream and a severity guessed from the line, colour escapes removed. Output reaches the terminal unchanged, the command's exit code passes through, and a shipping failure is reported once, never failing the command. | Must | Verified | `pump_echoes_everything_and_ships_clean_non_empty_lines`, `tail_passes_the_exit_code_through`, `unreachable_endpoint_drops_lines_without_failing`, `payload_is_otlp_json_with_service_and_stream`, `lines_are_cleaned_of_terminal_escapes`; AC-LOGX exit-code check |
-| DASHR-OTEL-005 | Traces and metrics sent to the endpoint are queryable from the agent's tools through Tempo and Prometheus, masked like any other datasource. | Should | Verified | AC-OTEL traces-and-metrics scenario in `scripts/e2e/run.sh` |
-| DASHR-OTEL-006 | A log line, trace or metric sent to the endpoint is queryable within 5 seconds (DEC-033). | Must | Verified | AC-OTEL and AC-LOGX assert 10 s on CI runners; measured about 2 s for traces and 3 s for logs locally; `otel_flavor_is_one_hardened_container_receiving_otlp_on_loopback` (Tempo settings) |
-
-### 8.14 Live log checks (LOGX)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-LOGX-001 | Log expectations (name, pattern, `present` or `absent`; up to 12; an optional LogQL stream selector and Loki datasource) are armed through `expect_logs` or `dashr expect`. Patterns are case-insensitive and limited to what means the same to Loki and to the browser; others are refused. Works with the OpenTelemetry Loki or any configured Loki. | Must | Verified | `validation_keeps_patterns_portable`, `js_folding_matches_case_insensitively_and_keeps_classes_and_escapes`, `picks_the_loki_datasource`, `parses_named_and_bare_expectations`; AC-LOGX refusal in `scripts/e2e/run.sh` |
-| DASHR-LOGX-002 | Arming puts a section at the top of the current dashboard: one tile per expectation counting matching lines (grey "waiting" then green for an expected message, green "none" then red for a forbidden one) and a live log trail, newest first, with expected lines on green and forbidden lines on red. The agent's panels move down; arming again replaces the section; clearing removes it and restores the layout. | Must | Verified | `section_has_tiles_then_a_highlighted_trail`, `merge_puts_the_section_on_top_and_replaces_an_earlier_one`; browser trail-colour scenario and AC-LOGX clear in `scripts/e2e/run.sh` |
-| DASHR-LOGX-003 | Counting starts when the expectations are armed, and the browser pane moves to that time range (DEC-031). | Must | Verified | `rfc3339_formats_utc`, `count_query_is_case_insensitive_and_zero_filled`; browser scenario ("moved the browser to the armed time range") and AC-LOGX in `scripts/e2e/run.sh` |
-| DASHR-LOGX-004 | The pane notifies the human as each expected message arrives, marks itself blocked with the expectation's name when a forbidden one does, and returns to idle when the expectations are cleared. | Must | Verified | `watches_notify_for_expected_and_alert_for_forbidden`, `an_info_watch_notifies_without_blocking`; AC-LOGX in `scripts/e2e/run.sh` |
-| DASHR-LOGX-005 | The verdict (`log_expectations`, `dashr expect --check` and its exit status) carries counts and waiting/seen/clear/violated per expectation, never a line. | Must | Verified | `outcomes`; AC-LOGX "counts only" check in `scripts/e2e/run.sh` |
-
-### 8.15 Saved dashboards (LIB)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-LIB-001 | The current dashboard can be saved on this machine under a name the human chooses (`save_dashboard`, `dashr dashboards save`), in the plugin state directory, outliving every session. Names are 1-60 characters of letters, digits, spaces, `-`, `_`, `.`; one dashboard per name, case-insensitive; an existing name is replaced only when asked. | Must | Verified | `names_are_checked_and_case_insensitive`, `save_list_load_delete`; AC-LIB in `scripts/e2e/run.sh` |
-| DASHR-LIB-002 | What is saved is the dashboard definition only — panels, queries, layout, time range — never a data value. The session-pinned uid, id and version and the log-expectation section (with its armed time range) are left out. | Must | Verified | `saving_drops_what_belongs_to_the_session`; AC-LIB |
-| DASHR-LIB-003 | A saved dashboard loads into any later session (`load_dashboard`, `dashr dashboards load`, `dashr session start --load`), replacing the current one and reloading the browser pane; expectations armed on the replaced dashboard are dropped. A dashboard using a datasource the session lacks is refused, naming it, and nothing changes. | Must | Verified | `save_list_load_delete` (missing datasources); AC-LIB load across panes and refusal in an OpenTelemetry pane in `scripts/e2e/run.sh` |
-| DASHR-LIB-004 | Saved dashboards can be listed (with whether each can load in this session) and deleted, and the agent's opening prompt names them so the human can ask for one by name. | Should | Verified | `opening_prompt_names_saved_dashboards`; AC-LIB `list_saved_dashboards` and `dashr dashboards list` checks |
-
-### 8.16 Live collectors (COLL)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-COLL-001 | `dashr discover` reports what runs here and what can be measured, without any data value or log line. It covers containers (name, image, kind such as app, Postgres, MySQL, Redis or Ollama, published ports, compose project), whether each container's recent log has request lines and in which format, Prometheus `/metrics` endpoints, installed CLIs (docker, kubectl, aws, az, gcloud, ...) and which clouds look logged in, and project files. It also lists the `dashr collect` commands that would make them live. | Must | Verified | `dashr_runtime::discover` tests; `kinds_and_ports_from_docker_ps`; AC-COLLECT in `scripts/e2e/run.sh` |
-| DASHR-COLL-002 | The dashboard pane runs the session's collectors for as long as it lives, with no agent in the loop. Collectors added or removed with `dashr collect` take effect within seconds. Closing the pane stops them and kills the commands they started. `dashr collect list` shows each collector's state, and the pane shows how many are live and which fail. | Must | Verified | `dashr_runtime::collect::run`; `status_shows_the_link_and_one_health_line_only`; AC-COLLECT |
-| DASHR-COLL-003 | Built-in collectors cover the usual system signals. Containers: CPU, memory and limit, network and disk IO, PIDs, up. The host: CPU, load, memory, swap, disk use and IO, network. Processes by name. Postgres, MySQL and Redis containers: connections, throughput, cache hit ratio, slow or longest queries, and normalized `pg_stat_statements` when installed, read with the database's own client inside its container. | Must | Verified | `docker_stats_json_line`, `database_status_lines_and_query_labels`, `host_and_process_samples_carry_the_expected_metrics`; AC-COLLECT (Docker, host, Postgres) |
-| DASHR-COLL-004 | `logs <container>` and `stream -- <command>` send a log command's lines to Loki and derive request rate, 4xx/5xx rates, error ratio and p50/p95/p99 latency from ASP.NET, Gin, nginx/Apache, JSON and generic request lines. Only the method, status and duration are read, never the path. A stream that ends is restarted. | Must | Verified | `request_lines_from_common_servers`, `a_window_gives_rates_errors_and_percentiles`; AC-COLLECT |
-| DASHR-COLL-005 | `exec --every N -- <command>` runs any command on a schedule (at least every 10 s, through `cmd /c` on Windows) and stores the Prometheus text it prints. `scrape <url>` forwards a `/metrics` endpoint. This is how clouds (AWS, Azure, Google Cloud), clusters and remote hosts reach the dashboard, through whatever CLI the agent uses. Every collector is tried once when added: only its metric names and label keys are reported, and a collector that produces nothing is refused. | Must | Verified | `prometheus_text_with_labels_escapes_and_junk`, `exec_reads_prometheus_text_and_labels_the_service`, `trial_reports_names_not_values`; AC-COLLECT |
-| DASHR-COLL-006 | The skill makes discovery, collection and the system dashboard the default flow for any target: local apps, containers, databases, Kubernetes, AWS, Azure, Google Cloud, remote hosts. It includes a standard system-engineer layout, per-environment discovery and adapter examples, and the rule that the agent never generates traffic to measure. | Must | Implemented | `.agents/skills/herdr-dashr/SKILL.md`, `reference/collectors.md`, `reference/environments.md` |
-
-### 8.17 Database query performance (DB)
-
-| ID | Requirement | Priority | Status | Evidence |
-|---|---|---|---|---|
-| DASHR-DB-001 | `dashr db add <name>` connects a PostgreSQL or SQL Server database to the session's Grafana as a datasource. It takes a connection string (PostgreSQL URI or `key=value`; SQL Server ADO.NET, as Azure shows it, or `sqlserver://`) from `--url`, `--url-env` or stdin, or the parts (`--engine --host --port --database --user`). It checks Grafana can connect, deletes the datasource again if not, and reports what the database lets dashr see (pg_stat_statements, `pg_read_all_stats`, plan cache, Query Store, Azure SQL Database) with setup hints, as flags only. `list` and `remove` manage the session's databases. | Must | Verified | `postgres_uris_with_escapes_and_params`, `libpq_key_values`, `ado_net_strings_for_azure_and_local`, `connections_from_a_url_or_parts`; AC-DB, AC-DB-MSSQL |
-| DASHR-DB-002 | Database credentials never reach a state file, a log or the agent: the password goes only to Grafana's encrypted `secureJsonData`, and database datasources are registered as personal, so every row reaching the agent is masked. A database reachable only through a CLI works: `--password-command` (an RDS IAM token, a Secrets Manager or Key Vault secret) is re-run by the pane every `--refresh-secs`, and `--tunnel-command` (SSM port forwarding, `ssh -L`, `kubectl port-forward`, Cloud SQL proxy) is kept running by the pane, restarted when it ends, and stopped with its process group on remove or pane close. `add` hands that path to the pane and returns once the pane's collector reports it healthy; without the pane's collectors (no `DASHR_OTEL=1`) a database that needs one is refused. On Linux a database on loopback is relayed to the Grafana container on the Docker bridge gateway only, never on the network. | Must | Verified | `datasources_carry_the_password_only_as_secure_data`, `tunnels_restart_and_stop_with_their_children`; AC-DB (tunnel, password command, relay, no password in state or output) |
-| DASHR-DB-003 | The PostgreSQL dashboard (13 or later) shows the top statements by total time, by mean time and by disk and temp IO, with share of all time and cache hit %; each database's share of time, reads, buffer access, temp writes and rows; running sessions with waits and blockers; tables by sequential-scan reads and dead rows with last vacuum and analyze; and unused indexes. Without pg_stat_statements it says how to enable it and keeps the rest. | Must | Verified | Every query run against PostgreSQL 16 with pg_stat_statements; AC-DB (every table panel `ok` or `empty`) |
-| DASHR-DB-004 | The SQL Server dashboard (2016 or later, Azure SQL) rewrites the human's two procedures. The top 20 by CPU, elapsed time and logical reads are grouped by `query_hash`, show the statement's own text rather than the whole batch, compute averages without integer truncation, take the database from the plan attributes (ad hoc queries have no `dbid`) and leave the plan XML out. The per-database share is computed in one pass with no division by zero. It adds waits without idle waits (database-scoped on Azure SQL Database), file read and write latency, running requests with blockers, missing-index suggestions, Query Store's last hour and Azure resource use. `dashr db plan <name> <query_hash>` saves a statement's cached plan as a `.sqlplan` file for the human and prints only its path. | Must | Verified | Every query run against SQL Server 2022; `plans_only_for_well_formed_hashes`; AC-DB-MSSQL |
-| DASHR-DB-005 | The pane samples each database every 30 seconds through Grafana, so dashr needs no database driver. Cumulative counters become per-second series: transactions, rows, cache hits, deadlocks, temp bytes, sessions by state and wait, blocked sessions and the longest transaction on PostgreSQL; batch requests, compilations, page life expectancy, buffer cache hit ratio, blocked processes and waits on SQL Server; and per statement calls, time and mean time per call, plus each database's share of time. dashr's own queries carry a `/* dashr */` tag and are left out of every statement statistic. | Must | Verified | `deltas_give_rates_and_means`, `metric_names`; AC-DB, AC-DB-MSSQL (live series, none from dashr's own queries) |
-| DASHR-DB-006 | `dashr db dashboard <name>` prints the ready dashboard for `apply_dashboard`, or panels to merge (`--id-offset`, `--y-offset`), with trend panels only when the session has Prometheus. The skill's `reference/databases.md` covers connecting without pasting passwords, RDS and Aurora through the AWS CLI (IAM token, Secrets Manager, SSM tunnel, and Performance Insights through an `exec` collector when there is no connection at all), Azure SQL and Azure PostgreSQL, Cloud SQL, least-privilege users, how to read each panel, and troubleshooting. | Must | Implemented | `dashboards_are_valid_and_point_at_the_database`; `.agents/skills/herdr-dashr/reference/databases.md` |
+| DASHR-TECH-001 | Rust 2024 workspace, `unsafe` forbidden, clippy `all` denied, rustfmt; no async runtime. | Must | Verified | `Cargo.toml` |
+| DASHR-TECH-002 | CI builds and tests on Linux, macOS and Windows and runs the end-to-end suite on Linux. | Must | Verified | `.github/workflows/build-and-test.yml`, `.github/workflows/end-to-end.yml` |
+| DASHR-TECH-003 | The end-to-end suite drives the real binary, a real Jaeger, services instrumented with the real OpenTelemetry SDK (OTLP over HTTP and gRPC), a real Herdr with the plugin linked, and a real Chrome. | Must | Verified | `scripts/e2e/run.sh` |
+| DASHR-TECH-004 | Releases publish checksummed archives for five targets and npm packages per platform; the npm launcher, the packaging script, the installer and the release matrix list the same platforms. | Must | Verified | `release_packaging_shim_and_installer_list_the_same_platforms` |
+| DASHR-GOV-001 | `docs/PRD.md` is the specification; every pull request updates it. | Must | Verified | `.github/workflows/prd-traceability.yml` |
+| DASHR-GOV-002 | A requirement may claim `Verified` only with evidence a reader can open. | Must | Verified | `.github/scripts/check-prd-traceability.ps1` |
 
 ## 9. Security requirements
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| DASHR-SEC-001 | No unmasked datasource value is returned by any MCP tool. | Verified | AC-MASK in `scripts/e2e/run.sh` |
-| DASHR-SEC-002 | Grafana listens on loopback only. | Verified | `run_args_store_nothing_and_bind_loopback`. |
-| DASHR-SEC-003 | No secret is written to a file or passed in argv. | Verified | `secrets_are_passed_by_name_only`, `secrets_are_env_references_never_values`. |
-| DASHR-SEC-004 | The container cannot escalate: read-only root, no swap, no capabilities, no-new-privileges. Plain Grafana persists nothing (tmpfs); in OpenTelemetry mode telemetry is written to anonymous volumes that are deleted with the container (DEC-033). | Verified | AC-OPEN and AC-OTEL `docker inspect` assertions; AC-OTEL checks the volumes are gone after the pane closes |
-| DASHR-SEC-005 | dashr runs no browser, so it creates no browser profile to leak or clean up (DEC-040). | Verified | `crates/dashr-cli/src/pane.rs`; Chrome scenario uses the human's own browser |
-| DASHR-SEC-006 | Screenshots of dashboards touching personal datasources are refused. | Verified | `screenshots_only_for_non_personal_dashboards`. |
-| DASHR-SEC-007 | Herdr pane state (messages, tokens) carries counts and rule wording only, because Herdr's socket has no caller authentication (#514). | Verified | `a_new_breach_blocks_and_notifies_once`, `grafana_errors_show_in_the_token` (counts and wording only) |
-| DASHR-SEC-008 | The reaper only stops containers labelled with this Herdr server's socket hash. | Verified | `orphans_are_this_servers_containers_without_a_live_pane`, `session_ids_differ_between_servers_for_the_same_pane`. |
+| DASHR-PRIV-001 | Everything the agent receives that came from a span — trace lists, sequences, spans, verdicts, trial reports, source errors — passes through `dashr_core::privacy::Masker`: emails, card numbers (Luhn), IBANs (mod-97), phone numbers, IP addresses, JWTs, AWS keys, bearer tokens and credential pairs become stable pseudonyms; attributes named personal (`customer.email`, `user.name`) or secret (`auth.token`) are replaced whole; OpenTelemetry semantic-convention attributes are scanned, not replaced by name. | Verified | `personal_and_secret_attributes_become_pseudonyms`, `semantic_conventions_are_not_names`; AC-MASK |
+| DASHR-PRIV-002 | Masking can be switched off (`[masking] enabled = false`) only in the human's configuration, for synthetic data. | Verified | `masking_can_be_switched_off_for_synthetic_data` |
+| DASHR-SEC-001 | The session API and viewer listen on loopback only; each needs its own random 128-bit token, compared in constant time; the viewer token travels in the URL fragment, never to a server log or referrer. | Verified | `durations_and_tokens`; AC-SESSION |
+| DASHR-SEC-002 | The session record holding the agent token is owner-only (0600). | Verified | AC-SESSION |
+| DASHR-SEC-003 | The Jaeger container is read-only, without capabilities, without a logging driver, with no-new-privileges, and published on loopback by default. | Verified | AC-SESSION |
+| DASHR-SEC-004 | Pull-source commands run as the human, with only the window variables added; dashr stores no cloud credentials. | Verified | `runs_with_environment_and_reports_failures` |
+| DASHR-SEC-005 | Nothing the session held survives it: spans live only in the container's memory and the pane's process. | Verified | AC-HERDR |
 
 ## 10. Non-functional requirements
 
-- Dashboard pane ready (Grafana healthy, first dashboard applied) within the
-  configured timeout, 90 s by default; typically under 15 s with a pulled image.
-- Memory: Grafana limited to `grafana.memory` (768 MiB by default); the
-  OpenTelemetry container to `otel.memory` (2 GiB by default).
-- In OpenTelemetry mode, anything sent to the endpoint is queryable within
-  5 seconds (DASHR-OTEL-006).
-- The binary is a single executable with no runtime dependency beyond
-  `docker` and, optionally, `terminal-browser`, the agent CLI and `aws`.
+| Area | Requirement |
+|---|---|
+| Startup | A session is ready within seconds once the image is present (≈3 s measured); the first start pulls a 173 MB image. |
+| Freshness | Local spans appear within about two seconds (batch delay 500 ms, poll 1.5 s); pulled spans within a source's interval plus the backend's own delay. |
+| Footprint | Jaeger idles at about 12 MB; the store keeps at most 2,000 traces of 10,000 spans. |
+| Platforms | Linux, macOS, Windows (x64); Docker required. |
 
 ## 11. Testing strategy
 
-- **Unit tests** per crate for every pure function, including the masking
-  corpus and every argv builder.
-- **HTTP tests** against an in-process server for the Grafana client.
-- **Fake CLIs** (shell scripts) for `herdr`, `aws` and error paths.
-- **End-to-end** (M3): real Herdr server, real Grafana container, plugin
-  linked, action invoked, MCP driven over stdio, pane closed, container gone.
-  The OpenTelemetry scenario ships real lines with `dashr tail`, sends OTLP
-  traces and metrics, and reads the live trail's highlight colours from the
-  browser pane over CDP.
+- Unit tests in every crate: converters against realistic documents of each
+  format, the protobuf decoder against hand-encoded requests (including every
+  truncation), flows and verdicts, sequences, masking, the HTTP server, the
+  Docker arguments, session records.
+- The end-to-end suite (`scripts/e2e/run.sh`) for every acceptance criterion
+  in section 15, in CI on every pull request.
 
 ## 12. Decisions
 
+DEC-001 to DEC-044 belong to the 1.x dashboard product; they are in this
+file's history before 2.0.
+
 | ID | Decision |
 |---|---|
-| DEC-001 | Rust instead of the .NET stack in the handoff, at the owner's request. |
-| DEC-002 | Plugin id `herdr-dashr`, binary `dashr`, requirement prefix `DASHR-`. |
-| DEC-003 | Traceability runs on `pull_request_target` from the trusted base; build and test on `pull_request` with a read-only token. |
-| DEC-004 | Minimum Herdr 0.9.0; development and CI verified against 0.9.1. |
-| DEC-005 | Herdr is driven through its CLI (`HERDR_BIN_PATH`), not the raw socket. |
-| DEC-006 | Toolchain pinned to 1.94.1. |
-| DEC-007 | Blocking HTTP (`ureq`); no async runtime. |
-| DEC-008 | Custom image installs plugins to `/usr/share/grafana/plugins-dashr`, because `/var/lib/grafana` is a tmpfs. |
-| DEC-009 | Session ids and container labels include a hash of the Herdr socket path; pane ids repeat across Herdr sessions. |
-| DEC-010 | Provisioning is emitted as JSON in a `.yaml` file (JSON is YAML). |
-| DEC-011 | `mcp-grafana` is opt-in: its query tools return raw rows and bypass masking. dashr provides `probe_query` for masked discovery. |
-| DEC-012 | Seq is read through the Infinity datasource with an `X-Seq-ApiKey` header. |
-| DEC-013 | `/api/ds/query` is called once per query: one unknown datasource fails a whole request. |
-| DEC-014 | AWS through the `aws` CLI (SSO, profiles, MFA as configured), not an SDK. |
-| DEC-015 | Watches are evaluated by the pane, not by Grafana alerting, so values stay local and no alerting state is persisted. |
-| DEC-016 | The MCP protocol is hand-rolled (four methods) rather than an SDK dependency. |
-| DEC-017 | Email, IBAN, card and secret detectors run on every datasource regardless of its `personal` flag. The end-to-end suite showed a single mis-set flag leaking planted emails; the flag now only relaxes low-confidence detection. |
-| DEC-018 | `herdr pane split --ratio` is the share the original pane keeps (observed on 0.9.1); `agent.split_ratio` is passed as is. |
-| DEC-019 | The default agent argv puts the prompt before `--mcp-config`, whose Claude Code parser takes several values and swallowed the prompt. |
-| DEC-020 | `masking.testdata_personal` lets the end-to-end suite run full masking through a real Grafana using TestData CSV. |
-| DEC-021 | Dependency majors (ureq 3, toml 1, signal-hook 0.4, base64 0.23, actions/checkout 7) are taken together in one reviewed PR with code changes, superseding the Dependabot PRs that could not compile on their own. |
-| DEC-022 | `remove_watch` leaves breach state to the pane's monitor, which reports the rule as cleared and returns the pane to idle. Clearing it in the tool hid the transition and left the pane blocked (found by the end-to-end suite). |
-| DEC-023 | Releases can be cut by a manual run of the release workflow from `main`: it releases the manifest version and creates the tag at that commit, for sessions whose git access cannot push tags. |
-| DEC-024 | Reload and screenshot drive terminal-browser's Chromium directly over the DevTools protocol (port from `terminal-browser ls --json`, loopback websocket only). `terminal-browser action` goes through agent-browser, which forgets its CDP attachment after one command and tries to launch its own Chrome (terminal-browser 0.11.1, agent-browser 0.33.0). |
-| DEC-025 | The browser process gets `LANG=en_US.UTF-8` when the environment's locale is missing, C or POSIX: Chromium then reports language `c` and Grafana replaces the dashboard with "An unexpected error happened" (`RangeError: Invalid language tag: c`). Found by the browser-pane scenario. |
-| DEC-026 | Runtime directories under shared bases (`/dev/shm`, `/tmp`) are `herdr-dashr-<user>`: the first user's 0700 `herdr-dashr` locked other users out and pushed them to disk. |
-| DEC-027 | The skill is embedded in the binary and installed by a plugin build step (`bin/dashr skill install --best-effort`) plus a refresh from the dashboard pane, and served as MCP resources. The build step pins the skill to the binary that serves its tools; ownership is marked in `SKILL.md` so user skills are never overwritten. The plugin version moves to 0.2.0 because the build step needs a binary that has `skill install`. |
-| DEC-028 | npm distribution follows herdr-remote-channel: per-platform packages with the verified binary inside, a `bin.js` shim, a publish workflow triggered by the Release workflow. Unlike herdr-remote-channel, the plugin manifest keeps running `bin/dashr`: `install.sh` takes the binary from npm when it can and falls back to the GitHub release, so the plugin needs no Node at run time and installs keep working before a version reaches npm. |
-| DEC-029 | OpenTelemetry mode swaps the image for `grafana/otel-lgtm` (pinned, 0.34.0) rather than adding containers: the constraint is one container per pane, and the image already runs Grafana, a collector, Loki, Tempo and Prometheus. It keeps the plain container's hardening; `/tmp` is tmpfs and `/data` and `/var/tempo` are writable (Tempo will not start without the last, see DEC-033), dashr's provisioning file is mounted into the image's provisioning directory beside its own datasources, plugin preinstall is off, and the minimum refresh is 1 s. |
-| DEC-030 | `dashr tail` speaks OTLP/HTTP with JSON bodies, which the collector accepts: no protobuf or gRPC dependency. Lines are batched every 250 ms (500 at most); the severity is read from the line's own words, stdout defaults to INFO and stderr to unspecified rather than error. |
-| DEC-031 | Expectations are matched twice: by Loki (RE2 with `(?i)`) for the counts and by a Grafana table value mapping (a JavaScript regex, no inline flags) for the highlight, so patterns are limited to the common subset and case-folded as `[xX]` for the browser. The tiles use `count_over_time(... [$__range]) or vector(0)`; because Grafana renders `$__range` in whole seconds, a window starting exactly at arming dropped lines logged in its first second on alternate refreshes (found by AC-LOGX), so the window starts one second before arming. The time is written as RFC 3339: Grafana's time picker shows an epoch-millisecond string as "Invalid date". |
-| DEC-032 | Expectations become watches: expected messages are `info` (notify, never block), forbidden ones `alert`. Arming and clearing leave breach state to the monitor, as `remove_watch` does (DEC-022), so a cleared forbidden message returns the pane to idle. A panel with no data keeps its watch's state: a transient failed query had made a seen message clear and notify again. |
-| DEC-033 | The storage constraint is relaxed for OpenTelemetry mode only; the one-container constraint is not. Telemetry lives in anonymous Docker volumes on `/data` and `/var/tempo`, which `--rm` deletes with the container, so a long test session no longer fills the memory limit with logs and traces. dashr mounts its own Tempo configuration (the image's plus `query_frontend.query_end_cutoff: 1s` and a faster live store): Tempo's default cuts the last 30 s from every query, which made a trace searchable only after about 30 s; now about 2 s. The target, agreed with the product owner, is 5 s. |
-| DEC-034 | Grafana silently ignores a dashboard `refresh` that is not in its `timepicker.refresh_intervals`, whose default starts at 5s: the OpenTelemetry sessions' 2s refresh left the dashboard static until reloaded (the plain sessions' 5s was unaffected). Found while taking screenshots of a running session, not by the e2e suite, whose lines arrived before the page loaded. dashr now adds the pinned interval to the list, the e2e suite ships a line after the page has loaded and waits for it to appear, and CI keeps screenshots of the browser pane (`e2e-screens` artifact). |
-| DEC-035 | Saved dashboards are JSON files in the plugin state directory (`dashboards/<name>.json`), not in Grafana: every session's Grafana is disposable, and a file per dashboard is easy to inspect, back up or delete. File names are the lowercased, sanitised name, so names differing only in case are one dashboard on every file system. Each file records the datasource uids its panels use, so a load can refuse up front instead of applying a dashboard whose panels would all fail. |
-| DEC-036 | Configured datasources that reuse a uid of the OpenTelemetry image are left out of provisioning, with a warning, when OpenTelemetry mode is switched on at run time. The configuration check only runs when `[otel] enabled` is in the file, so the action and `--otel` let two datasources share a uid, and which one Grafana kept depended on file order (found while writing the saved-dashboards scenario, whose configuration has a `Loki` datasource). |
-| DEC-037 | One public release. The earlier v0.1.0 and v0.2.0 GitHub releases (never published to npm) are deleted with their tags, and the version returns to 0.1.0: the first release anyone installs is v0.1.0 with every feature to date. `Delete release` (`.github/workflows/delete-release.yml`, manual, the tag typed twice) removes a release and its tag for sessions that cannot delete tags. Ledger rows naming v0.2.0 and v0.3.0 describe work that is now part of v0.1.0. |
-| DEC-038 | The plugin installs the way herdr-remote-channel does: `platforms` includes Windows, the build step is `npm install --no-save herdr-dashr@<version>` (via `cmd /c` on Windows, where `npm` is `npm.cmd`), and entry points run `node node_modules/herdr-dashr/bin.js`, since `node` resolves under any spawning model. `sh scripts/install.sh` had been skipped by Herdr on the first Windows install, leaving a plugin with no binary. This supersedes DEC-028's choice of running `bin/dashr` without Node. On Windows the chat pane command is quoted for PowerShell, and there is no SIGHUP: the `pane.closed` hook and the startup reaper stop the container. `scripts/install.sh` remains a Unix standalone installer. |
-| DEC-039 | The human talks only to their own AI session, as with herdr-remote-channel. The plugin installs the skill with `npx skills add` from this repository. The skill has that session open the dashboard pane itself (`herdr plugin pane open`, split beside it), wait for it (`dashr wait`) and build with `dashr tool`, a command that runs the MCP tools' own implementation, so masking and privacy rules are one code path. A pane opened that way has no chat pane; the Herdr actions keep theirs. State moved out of Herdr's plugin state directory into dashr's own (herdr-remote-channel keeps its own home), because the AI session's `dashr` has no Herdr plugin variables. The pane records its configuration directory so `dashr tool` masks with the same rules. Sessions and saved dashboards in the old plugin state directory are not migrated. |
-| DEC-040 | The dashboard pane shows a link instead of a browser. The human opens Grafana in their own browser (Chrome), which is a better experience than a terminal renderer. An open tab follows every dashboard change by itself through Grafana Live, verified with a real Chrome, so the pane needs no reload hook. terminal-browser has no Windows build and no public license, so it could not be bundled or pinned. The pane narrows itself to a fifth of its split and shows only the link, panel health, alerts and the OTLP endpoint. This supersedes the terminal-browser parts of DEC-034 and the browser-profile handling. The `screenshot` tool still uses terminal-browser if it happens to be installed. |
-| DEC-041 | The human sees only the dashboard. Kiosk mode hides Grafana's menus, but Esc brings back all of Grafana, and anonymous visitors are admins (dashr's own API calls rely on that). Grafana's shared ("public") dashboard view shows one dashboard and nothing else, even after Esc, but it does not follow changes. So the pane serves a small loopback page: the shared dashboard filling the window, reloaded when the saved dashboard version changes (polled every 2 s). The reload also brings in a time range the agent set, such as log checks' "since arming". The page answers only `/` and `/version`. Checked with a real Chrome: kiosk exits to the full UI on Esc; the shared view shows no Grafana UI and needs a reload to change. |
-| DEC-042 | First public release, 1.0.0. The README is a short landing page (what it is, one install command) modelled on tsk; configuration, privacy and the CLI moved to `docs/USAGE.md`, development to `CONTRIBUTING.md`. The one-line description is the same everywhere (npm, `herdr-plugin.toml`, GitHub About): "Live Grafana dashboards your AI agent builds, right beside your chat in Herdr." The manifest follows tsk's style (a one-line header, `name = "herdr-dashr"`, a description on every action, the dashboard pane as a split) and is still generated. herdr.dev/plugins lists repositories with the `herdr-plugin` topic and a valid manifest; the card shows the GitHub description. The 0.1.x npm versions were tests; the owner removes them by hand (npm refuses unpublishing with the 2FA-bypass token CI uses). The skill is installed for every detected agent, not only Claude Code; `--agent '*'` was rejected because it created about 70 agent folders in HOME. |
-| DEC-043 | Dashboards are built from what is actually running, for any environment. `dashr discover` finds local containers, processes, databases and their log formats. Collectors run inside the dashboard pane, so the dashboard stays live without an agent polling, and they stop with the pane. dashr knows no cloud: `exec` (any command printing Prometheus text on a schedule) and `stream` (any command printing log lines) are the adapters, and the skill shows how to write them around `aws`, `az`, `gcloud`, `kubectl` or `ssh`. Collector metrics are gauges that are already rates, so panels need no `rate()`. Request metrics read only method, status and duration from log lines, never the path, which can carry ids or personal data. The OTLP address left the pane: it is not a web page, and opening it returned 404. Found in a real session, where the dashboard showed only log panels and the agent's own health probe was the traffic. |
-| DEC-044 | Database query performance goes through Grafana instead of a database driver in dashr. The database becomes a Grafana datasource, so the live tables run on every refresh, the collector samples the same statistics through `/api/ds/query`, the password sits only in Grafana's encrypted store, and the datasource is personal, so the agent sees nothing but flags and masked samples. Cloud databases are often reachable only through a CLI (an ephemeral RDS instance with no connection string), so a password command and a tunnel command are first-class and kept alive by the pane, the way `exec` and `stream` are the cloud adapters of DEC-043. Statement statistics are cumulative since a restart, so the tables show the long view and the collector's deltas show now. The human's SQL Server procedures were rewritten rather than copied: grouped by `query_hash`, statement text by offsets, database from the plan attributes, no integer truncation, `NULLIF` against division by zero, and no plan XML per refresh (`dashr db plan` saves one on request). Shared dashboards do not support template variables, so each ordering is its own table. |
+| DEC-045 | Rewrite as a trace-driven end-to-end testing tool (2.0). The dashboard product was not useful to its owner; what he did by hand — deploying to an ephemeral environment and having an agent tail logs while he triggered the feature — is what dashr now does with traces. Names (repository, npm package, plugin id, `dashr`) stay, so installs and links keep working. |
+| DEC-046 | The pane owns a Jaeger container, as 1.x's pane owned Grafana: Jaeger takes OTLP over gRPC and HTTP (no protocol left to the SDKs' defaults), stores traces, and gives the human a second trace UI. dashr reads Jaeger's query API into its own store rather than storing spans itself. |
+| DEC-047 | dashr knows formats, not clouds. Remote traces arrive through pull sources: commands the agent writes around the human's own CLIs. Converters exist for the formats those CLIs and backends print (X-Ray, Application Insights, Cloud Trace, Jaeger, Tempo, Zipkin, OTLP). The human's credentials stay with the CLIs. |
+| DEC-048 | Pulled spans are sent on to Jaeger, and Jaeger's echo never replaces the pulled copy, so the source name stays on the span and Jaeger's UI shows the joined trace. |
+| DEC-049 | Flows unify the instrumentation plan and the test expectation: what the human reviews (`code`, `why`, attributes) is exactly what the run is judged against. A changed flow needs review again. |
+| DEC-050 | The sequence diagram is drawn from the span tree, not from span kinds alone: a client span whose callee sent spans draws nothing (the callee's span draws the call), so a call is drawn once whether or not both sides are instrumented; a span whose parent never arrived is drawn from `?`, making broken context propagation visible. |
+| DEC-051 | Masking stays the privacy boundary of 1.x, reshaped for spans: attribute names under OpenTelemetry semantic-convention namespaces are never treated as personal (`service.name`, `db.name`), so the agent keeps the structure it needs. |
+| DEC-052 | OTLP/protobuf is decoded by hand (about a hundred lines) for `dashr ingest` and sources, rather than a code generator and its build step. |
+| DEC-053 | Jaeger's self-tracing is switched off (`OTEL_TRACES_SAMPLER=always_off`): it traced every poll of its query API. The poller also ignores a `jaeger` service. Found while testing against a real Jaeger. |
 
 ## 13. Open questions and risks
 
 | ID | Question or risk |
 |---|---|
-| OQ-001 | Kitty-graphics rendering varies by terminal (Herdr #3018 WezTerm, #3941 iTerm2, #3697/#3676). The text view is the fallback. |
-| OQ-002 | macOS has no user tmpfs; runtime files use the private per-user temp directory and are deleted on stop. |
-| OQ-003 | Resolved: `TERMINAL_BROWSER_APPDATA` is honoured and the profile lands in the session runtime dir (browser-pane scenario). |
-| OQ-004 | Anonymous admin on loopback: any local process can reach the Grafana while the pane lives. Accepted for a single-user workstation. |
-| OQ-005 | macOS input helper of terminal-browser may need accessibility permission on managed machines. |
-| OQ-006 | CloudWatch Live Tail and Loki tail are not Grafana-native streams; panels refresh on an interval instead. |
-| OQ-007 | Resolved: terminal-browser refuses root and needs a kitty-graphics terminal; CI runs it as the non-root runner inside `scripts/e2e/kitty_term.py`, which answers the graphics probe and counts frames. Real terminals (Ghostty, kitty, WezTerm, iTerm2) remain subject to OQ-001. |
-| OQ-008 | Resolved: v0.1.0 is on npm. The first attempts were refused (E404 for an invalid token, then EOTP for a token without 2FA bypass); the working token is granular, Read and write on All packages, bypassing 2FA. Publish to npm checks the token first and stops at permission errors. Trusted Publishing (no stored token) can replace it now that the packages exist. |
-| OQ-009 | The OpenTelemetry image is large (about 0.9 GB to download, 3.6 GB unpacked), so the first OpenTelemetry pane waits for the pull; later ones start in seconds. dashr's Tempo configuration is a copy of the image's (0.34.0) and must be re-checked when the image is bumped. |
+| OQ-101 | X-Ray and Application Insights index with a delay of seconds to minutes; flows need a generous `settle_secs`. A source could report the backend's lag. |
+| OQ-102 | Step Functions passes trace context to Lambda tasks, but not to every integration (ECS `RunTask`, some SDK integrations); the skill tells the agent to check, and the sequence shows `?` where it breaks. |
+| OQ-103 | Services in containers reach Jaeger on the host only with `[jaeger] bind = "0.0.0.0"`, which also exposes it to the network. A Docker-network-only binding would be safer. |
 
 ## 14. Delivery ledger
 
@@ -480,54 +313,35 @@ Crates:
 | 2026-09-28 | Windows install fix: `herdr plugin install` failed at `bin.js global install` with MODULE_NOT_FOUND when a parent directory of the plugin checkout (the user's home) had a `package.json`, because npm installed herdr-dashr there. The build step now passes `--prefix .`. | HERDR-006 |
 | 2026-09-28 | Stopping a database's tunnel signalled every process on the machine when the tunnel's pid started with 1: procps-ng 4.0.4's `kill -TERM -<pid>` reads the pid as an option. It was found when the end-to-end suite's `db remove` shut down the GitHub runner. The group is now signalled as `kill -TERM -- -<pid>`, and never for a pid of 0 or 1. Before release. | DB-002 |
 | 2026-09-28 | Database datasources keep no idle connections. When `db add` handed its relay to the pane (and whenever a tunnel restarts), SQL Server's driver returned the pooled connections that died with the old path as "failed to connect to server". Reproduced against SQL Server 2022 and Grafana 12.1.1 by swapping the relay: two failures every time, none with `maxIdleConns: 0`. | DB-002 |
+| 2026-10-01 | 2.0: the rewrite (DEC-045). Removed the Grafana, Docker-dashboard, AWS, MCP and database code of 1.x. New: a Jaeger session per pane, the trace store fed by Jaeger and by pull sources, converters for OTLP (JSON and protobuf), X-Ray, Zipkin, Jaeger, Application Insights, Log Analytics and Cloud Trace, flows with the human's review and step-by-step verdicts, the live sequence-diagram viewer, the agent's commands, the new skill, and an end-to-end suite with real OpenTelemetry services, an X-Ray Step Functions run joined to them, a real Herdr and Chrome. | SESSION-001..006, TRACE-001..004, SOURCE-001..003, FLOW-001..005, VIEW-001..004, AGENT-001..003, HERDR-001..005, TECH-001..004, GOV-001..002, PRIV-001..002, SEC-001..005 |
 
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
 |---|---|---|---|---|
-| HERDR | 11 | 8 | 3 | 0 |
-| GRAF | 10 | 10 | 0 | 0 |
-| DS | 6 | 6 | 0 | 0 |
-| VIEW | 5 | 5 | 0 | 0 |
-| CHAT | 3 | 3 | 0 | 0 |
-| MCP | 11 | 11 | 0 | 0 |
-| PRIV | 7 | 7 | 0 | 0 |
-| AWS | 6 | 6 | 0 | 0 |
-| ALERT | 5 | 5 | 0 | 0 |
-| PROMO | 3 | 3 | 0 | 0 |
-| SKILL | 6 | 4 | 2 | 0 |
-| OTEL | 6 | 6 | 0 | 0 |
-| LOGX | 5 | 5 | 0 | 0 |
-| LIB | 4 | 4 | 0 | 0 |
-| COLL | 6 | 5 | 1 | 0 |
-| DB | 6 | 5 | 1 | 0 |
-| GOV/TECH | 8 | 6 | 2 | 0 |
-| SEC | 8 | 8 | 0 | 0 |
-| **All** | 116 | 107 | 9 | 0 |
+| SESSION | 6 | 6 | 0 | 0 |
+| TRACE | 4 | 4 | 0 | 0 |
+| SOURCE | 3 | 3 | 0 | 0 |
+| FLOW | 5 | 5 | 0 | 0 |
+| VIEW | 4 | 4 | 0 | 0 |
+| AGENT | 3 | 2 | 1 | 0 |
+| HERDR | 5 | 3 | 2 | 0 |
+| TECH/GOV | 6 | 6 | 0 | 0 |
+| PRIV/SEC | 7 | 7 | 0 | 0 |
+| **All** | 43 | 40 | 3 | 0 |
 
 ## 15. Acceptance criteria
 
-- **AC-OPEN** Invoking `open` in Herdr yields a tab with a dashboard pane
-  and a chat pane, a healthy Grafana on loopback, and the welcome dashboard.
-- **AC-CLOSE** Closing the dashboard pane leaves no container, runtime
-  directory or session file.
-- **AC-MASK** No MCP tool output contains a value planted in TestData CSV
-  personal fields.
-- **AC-PIPELINE** A CodePipeline URL yields the proposed dashboard.
-- **AC-ALERT** A breached watch marks the pane blocked and notifies once.
-- **AC-OTEL** The OpenTelemetry action yields one hardened container with
-  Grafana and OTLP on loopback, the endpoint shown in the text view and set
-  in the chat pane, and OTLP logs, traces and metrics queryable (masked)
-  through the agent's tools.
-- **AC-LOGX** Armed expectations start waiting; lines shipped with
-  `dashr tail` turn expected ones seen and the verdict passed; a forbidden
-  line turns its tile red, fails the verdict and blocks the pane; the verdict
-  never carries a line; clearing restores the dashboard and unblocks the pane.
-- **AC-AGENT** From an ordinary pane, the skill's commands open a dashboard pane beside it with no chat pane. `dashr wait` returns the session and a briefing (a pipeline's, when a link was given) without Grafana's address. `dashr tool` answers by pane id and never returns planted personal values. Closing the pane removes the session.
-- **AC-CHROME** The link in the pane opens the dashboard in a real Chrome. When the agent applies a change, the open tab shows it within seconds without reloading. A tab opened after arming log checks highlights expected and forbidden lines and picks up new lines by itself.
-- **AC-COLLECT** `dashr discover` describes a request-logging app container and a Postgres, without returning a log line. `dashr collect` adds docker, host, logs, postgres and exec collectors after a trial that reports names only, and refuses a broken one. Within a minute the session's Prometheus has live container CPU and memory, host memory, request rate, errors and p95 from the app's log, Postgres connections and commits, and the exec adapter's metric, and Loki has the app's lines. A collector can be removed.
-- **AC-DB** A PostgreSQL with pg_stat_statements, on loopback only, is added through a tunnel command and a password command. `dashr db add` reports its capabilities, and no state file or output holds the password. The applied database dashboard has every table `ok` or `empty`, and the session's Prometheus gets live transactions, sessions, per-statement calls and mean time and time share per database, none from dashr's own queries. `dashr db remove` stops the tunnel.
-- **AC-DB-MSSQL** A SQL Server 2022 is added from an ADO.NET connection string on stdin. Its dashboard's tables (top statements, per-database share, waits, file latency, sessions, missing indexes, Query Store) all query cleanly, and the session's Prometheus gets batch requests, page life expectancy, buffer cache hit ratio, waits and CPU per statement and per database. `dashr db plan` saves a statement's plan to a file and prints only its path.
-- **AC-LIB** A dashboard saved by name in one pane loads into a later pane;
-  an existing name is not replaced without asking; a dashboard needing a
-  datasource the session lacks is refused, naming it, and nothing changes.
+Each is a scenario of `scripts/e2e/run.sh`.
+
+- **AC-SESSION** `dashr serve` starts Jaeger read-only, without capabilities or logs, with its ports on loopback and self-tracing off; the session record is owner-only; the agent API and the viewer refuse requests without their token.
+- **AC-OTLP** A service exporting over OTLP/HTTP (protobuf), one over OTLP/gRPC and a driver make one trace of three services with no orphans; the agent's sequence shows the calls, the internal step, the database and the queue.
+- **AC-MASK** The agent's trace list and trace show a pseudonym where the customer's email is; the viewer shows the real address.
+- **AC-FLOW** A new flow waits for review (`flow wait --review` times out, exit 4); the human's "changes requested" and comment reach the agent (exit 3); a changed flow is taken.
+- **AC-VIEW** In Chrome, the human approves the flow with the viewer's button and the agent's `flow wait --review` exits 0; a correct run passes 5/5 with the sequence; a broken run (too many items, a card number recorded) fails with each step's reason and no card number in the output; the viewer shows the failure and draws the sequence.
+- **AC-SOURCE** A pull source printing `batch-get-traces` output for a Step Functions run (ten Lambdas, an ECS task, DynamoDB) joins the local trace under the event that started it; the trial reports counts only; the failing Lambda's error is masked; the spans reach Jaeger; a failing source is refused with its reason, `--keep-on-error` keeps one, `rm` removes them.
+- **AC-FORMATS** Zipkin, Jaeger, Application Insights and Cloud Trace exports import with `dashr ingest`, recognised by shape; an unknown document is refused.
+- **AC-REAP** After a session is killed with SIGKILL, the Herdr startup hook removes its container and record.
+- **AC-HERDR** The AI session opens the trace pane with `herdr plugin pane open`; `dashr wait --session <pane>` finds it; the pane shows the viewer and Jaeger links and that a flow waits for review; closing the pane removes Jaeger and the record.
+- **AC-DOCTOR** `dashr doctor` passes the required checks and reports the optional ones.
+- **AC-LAUNCHER** The npm launcher (`npm/dashr/bin.js`) runs the build under test.

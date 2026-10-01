@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dashr traces</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc;
+  --accent: #2f5bd3; --accent-soft: #e7edfb; --ok: #1f7a4d; --ok-soft: #e3f3ea;
+  --bad: #c2362b; --bad-soft: #fbe6e3; --warn: #a86400; --warn-soft: #fbf0dc;
+  --life: #c9c8c1; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413; --panel: #1d1d1b; --ink: #ecebe6; --muted: #9a9a93; --line: #2f2f2c;
+    --accent: #7ea2ff; --accent-soft: #1f2a45; --ok: #5fcf93; --ok-soft: #173326;
+    --bad: #ff7b6e; --bad-soft: #3d1c19; --warn: #f0b45a; --warn-soft: #3a2a12; --life: #45453f;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button { font: inherit; color: inherit; cursor: pointer; }
+header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+  background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); display: inline-block; margin-right: 6px; }
+header .dot.off { background: var(--bad); }
+header .meta { color: var(--muted); font-size: 12.5px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+header code { font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 1px 6px; border-radius: 4px; cursor: copy; }
+header a { color: var(--accent); }
+main { display: grid; grid-template-columns: 320px 1fr; height: calc(100% - 50px); }
+aside { border-right: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
+aside h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 16px 14px 6px; font-weight: 600; }
+.item { padding: 9px 14px; border-left: 3px solid transparent; cursor: pointer; }
+.item:hover { background: var(--bg); }
+.item.sel { background: var(--accent-soft); border-left-color: var(--accent); }
+.item .t { font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
+.item .t span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .s { color: var(--muted); font-size: 12.5px; }
+.badge { display: inline-block; font-size: 11.5px; padding: 0 7px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
+.b-ok { background: var(--ok-soft); color: var(--ok); } .b-bad { background: var(--bad-soft); color: var(--bad); }
+.b-warn { background: var(--warn-soft); color: var(--warn); } .b-mute { background: var(--bg); color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.chip { font-size: 11px; padding: 0 6px; border-radius: 4px; color: #fff; }
+.empty { color: var(--muted); padding: 6px 14px 12px; font-size: 13px; }
+section.view { overflow: auto; display: flex; flex-direction: column; min-width: 0; }
+.tabs { display: flex; gap: 2px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; align-items: end; }
+.tabs button { border: 0; background: none; padding: 8px 14px; border-bottom: 2px solid transparent; color: var(--muted); }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs .spacer { flex: 1; }
+.tabs label { color: var(--muted); font-size: 12.5px; padding: 8px 4px; }
+.pane { padding: 16px; }
+.title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.title h3 { margin: 0; font-size: 17px; }
+.title .s { color: var(--muted); font-size: 13px; }
+svg text { fill: var(--ink); font-size: 12.5px; }
+.seq-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.msg { cursor: pointer; }
+.msg:hover text.label { fill: var(--accent); }
+.msg.sel text.label { fill: var(--accent); font-weight: 700; }
+.details { margin-top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.details h4 { margin: 0 0 8px; font-size: 14px; }
+table.kv { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.kv td { border-top: 1px solid var(--line); padding: 4px 8px 4px 0; vertical-align: top; }
+table.kv td:first-child { color: var(--muted); white-space: nowrap; width: 1%; padding-right: 18px; }
+table.kv td.v { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+.wf { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 0; }
+.wf-row { display: grid; grid-template-columns: minmax(220px, 34%) 1fr 80px; align-items: center; gap: 8px; padding: 3px 12px; cursor: pointer; font-size: 13px; }
+.wf-row:hover { background: var(--bg); } .wf-row.sel { background: var(--accent-soft); }
+.wf-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-track { position: relative; height: 14px; }
+.wf-bar { position: absolute; top: 1px; height: 12px; border-radius: 3px; min-width: 2px; }
+.wf-dur { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.flow-head { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.review { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+.review textarea { width: 100%; min-height: 60px; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); margin: 8px 0; }
+.btn { border: 1px solid var(--line); background: var(--panel); padding: 6px 14px; border-radius: 6px; font-weight: 600; }
+.btn.primary { background: var(--ok); border-color: var(--ok); color: #fff; }
+.btn.warn { color: var(--warn); }
+table.steps { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-size: 13px; }
+table.steps th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
+table.steps td { padding: 8px 10px; border-top: 1px solid var(--line); vertical-align: top; }
+table.steps td.mono, .mono { font-family: var(--mono); font-size: 12px; }
+.problems { color: var(--bad); font-size: 12.5px; margin-top: 3px; }
+.verdict { padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-weight: 600; }
+.v-pass { background: var(--ok-soft); color: var(--ok); } .v-fail { background: var(--bad-soft); color: var(--bad); }
+.v-wait { background: var(--bg); color: var(--muted); border: 1px dashed var(--line); } .v-run { background: var(--warn-soft); color: var(--warn); }
+.hint { color: var(--muted); font-size: 13px; }
+@media (max-width: 760px) { main { grid-template-columns: 1fr; height: auto; } aside { max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="dot"></span>dashr</h1>
+  <div class="meta" id="meta">connecting…</div>
+</header>
+<main>
+  <aside>
+    <h2>Flows</h2><div id="flows"></div>
+    <h2>Sources</h2><div id="sources"></div>
+    <h2>Traces</h2><div id="traces"></div>
+  </aside>
+  <section class="view">
+    <div class="tabs" id="tabs">
+      <button data-tab="sequence" class="on">Sequence</button>
+      <button data-tab="waterfall">Waterfall</button>
+      <button data-tab="flow">Flow</button>
+      <span class="spacer"></span>
+      <label><input type="checkbox" id="internal" checked> internal spans</label>
+      <label><input type="checkbox" id="follow" checked> follow newest</label>
+    </div>
+    <div class="pane" id="pane"><p class="hint">Waiting for the first trace. Point a service's OTLP exporter at the endpoint above, or let the agent add a pull source.</p></div>
+  </section>
+</main>
+<script>
+"use strict";
+const TOKEN = decodeURIComponent(location.hash.slice(1));
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const PALETTE = ["#2f5bd3", "#1f8a70", "#b5651d", "#8e44ad", "#c0392b", "#2c7fb8", "#7a8b1f", "#d35400", "#16a085", "#6d4c41"];
+const colour = (name) => { let h = 0; for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return PALETTE[h % PALETTE.length]; };
+const ms = (v) => v == null ? "" : v >= 1000 ? (v / 1000).toFixed(2) + " s" : v >= 10 ? v.toFixed(0) + " ms" : v.toFixed(1) + " ms";
+const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000); return s < 60 ? Math.round(s) + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : Math.round(s / 3600) + "h ago"; };
+
+let state = null, tab = "sequence", selectedTrace = null, selectedFlow = null, selectedSpan = null;
+let trace = null, traceKey = "", lastVersion = -1, comment = {};
+
+async function api(method, path, body) {
+  const response = await fetch(path, { method, headers: { "x-dashr-viewer": TOKEN, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || response.status);
+  return response.json();
+}
+
+function header() {
+  const i = state.info;
+  $("dot").className = "dot" + (state.poll_error ? " off" : "");
+  $("meta").innerHTML =
+    `<span>OTLP HTTP <code title="copy">${esc(i.otlp_http)}</code></span>` +
+    `<span>gRPC <code title="copy">${esc(i.otlp_grpc)}</code></span>` +
+    `<span><a href="${esc(i.jaeger_ui)}" target="_blank" rel="noopener">Jaeger UI ↗</a></span>` +
+    `<span>${state.traces.length} traces · ${state.spans_total} spans</span>` +
+    (state.poll_error ? `<span class="badge b-bad">Jaeger: ${esc(state.poll_error)}</span>` : "");
+  for (const code of $("meta").querySelectorAll("code")) code.onclick = () => navigator.clipboard?.writeText(code.textContent);
+}
+
+function verdictBadge(v, review) {
+  if (review === "pending") return `<span class="badge b-warn">review</span>`;
+  if (review === "changes_requested") return `<span class="badge b-warn">changes</span>`;
+  return { pass: `<span class="badge b-ok">pass</span>`, fail: `<span class="badge b-bad">fail</span>`, running: `<span class="badge b-warn">running</span>` }[v.status] || `<span class="badge b-mute">waiting</span>`;
+}
+
+function sidebar() {
+  $("flows").innerHTML = state.flows.length ? state.flows.map((f) =>
+    `<div class="item ${selectedFlow === f.flow.name && tab === "flow" ? "sel" : ""}" data-flow="${esc(f.flow.name)}">
+      <div class="t"><span>${esc(f.flow.name)}</span>${verdictBadge(f.verdict, f.review.state)}</div>
+      <div class="s">${esc(f.verdict.summary)}</div></div>`).join("") : `<div class="empty">No flow yet. The agent writes one for you to review.</div>`;
+  $("sources").innerHTML = state.sources.length ? state.sources.map((s) => {
+    const h = s.health, failing = h.last_error && h.last_ok_ms !== h.last_run_ms;
+    return `<div class="item"><div class="t"><span>${esc(s.spec.name)}</span><span class="badge ${failing ? "b-bad" : "b-ok"}">${esc(s.spec.format)}</span></div>
+      <div class="s">${failing ? esc(h.last_error) : `${h.spans_total} spans · every ${s.spec.every_secs}s · ${h.last_ok_ms ? ago(h.last_ok_ms) : "never"}`}</div></div>`;
+  }).join("") : `<div class="empty">Local services export straight to Jaeger. Remote ones (X-Ray, Azure, …) arrive through sources.</div>`;
+  $("traces").innerHTML = state.traces.length ? state.traces.map((t) =>
+    `<div class="item ${t.trace_id === selectedTrace && tab !== "flow" ? "sel" : ""}" data-trace="${t.trace_id}">
+      <div class="t"><span>${esc(t.root || "(no root yet)")}</span>${t.errors ? `<span class="badge b-bad">${t.errors} err</span>` : ""}</div>
+      <div class="s">${ms(t.duration_ms)} · ${t.spans} spans${t.orphans ? ` · <span style="color:var(--warn)">${t.orphans} orphaned</span>` : ""} · ${ago(t.start_ns / 1e6)}</div>
+      <div class="chips">${t.services.map((s) => `<span class="chip" style="background:${colour(s)}">${esc(s)}</span>`).join("")}</div></div>`).join("") : `<div class="empty">No traces yet.</div>`;
+  for (const el of document.querySelectorAll("[data-flow]")) el.onclick = () => { selectedFlow = el.dataset.flow; setTab("flow"); };
+  for (const el of document.querySelectorAll("[data-trace]")) el.onclick = () => { selectedTrace = el.dataset.trace; $("follow").checked = false; selectedSpan = null; if (tab === "flow") tab = "sequence"; setTab(tab); };
+}
+
+function setTab(name) {
+  tab = name;
+  for (const b of $("tabs").querySelectorAll("button")) b.classList.toggle("on", b.dataset.tab === name);
+  sidebar();
+  loadTrace(true);
+}
+
+async function loadTrace(force) {
+  if (tab === "flow") return render();
+  if (!selectedTrace) return render();
+  const summary = state.traces.find((t) => t.trace_id === selectedTrace);
+  const key = selectedTrace + ":" + (summary ? summary.updated_ms : "");
+  if (force || key !== traceKey) {
+    try { trace = await api("GET", "/v/trace/" + selectedTrace); traceKey = key; } catch { trace = null; }
+  }
+  render();
+}
+
+function stepMarks() {
+  const marks = {};
+  for (const f of state.flows) {
+    if (!trace || f.verdict.trace_id !== trace.summary.trace_id) continue;
+    for (const s of f.verdict.steps) if (s.span_id) marks[s.span_id] = { id: s.id, ok: s.status === "ok" || s.status === "skipped", flow: f.flow.name };
+  }
+  return marks;
+}
+
+function sequenceSvg() {
+  const seq = trace.sequence, spans = Object.fromEntries(trace.spans.map((s) => [s.span_id, s]));
+  const showInternal = $("internal").checked;
+  const messages = seq.messages.filter((m) => showInternal || m.kind !== "self_call");
+  const parts = seq.participants, marks = stepMarks();
+  const room = ($("pane").clientWidth || 1200) - 120;
+  const colW = Math.max(132, Math.min(190, Math.floor(room / Math.max(1, parts.length))));
+  const left = 86, top = 58, rowH = 30, nameChars = Math.floor((colW - 28) / 7.5);
+  const x = (p) => left + parts.indexOf(p) * colW + colW / 2;
+  // Calls, then their returns, in time order.
+  const events = [];
+  for (const m of messages) {
+    events.push({ t: m.start_ns, type: 0, m });
+    if (m.kind === "call" && m.from !== m.to) events.push({ t: m.end_ns, type: 1, m });
+  }
+  events.sort((a, b) => a.t - b.t || a.type - b.type);
+  const rows = new Map(); events.forEach((e, i) => { if (e.type === 0) rows.set(e.m.span_id, { start: i }); else rows.get(e.m.span_id).end = i; });
+  const width = left + parts.length * colW + 40, height = top + events.length * rowH + 40;
+  let svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="sequence diagram">
+    <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+    <marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="none" stroke="currentColor" stroke-width="1.5"/></marker></defs>`;
+  parts.forEach((p) => {
+    const cx = x(p), c = p === "caller" ? "var(--muted)" : p === "?" ? "var(--warn)" : colour(p);
+    svg += `<line x1="${cx}" y1="${top - 14}" x2="${cx}" y2="${height - 20}" stroke="var(--life)" stroke-dasharray="4 4"/>`;
+    svg += `<rect x="${cx - colW / 2 + 10}" y="10" width="${colW - 20}" height="30" rx="6" fill="${c}" opacity="${p === "caller" ? 0.25 : 0.95}"/>`;
+    svg += `<text x="${cx}" y="30" text-anchor="middle" style="fill:${p === "caller" ? "var(--ink)" : "#fff"};font-weight:600"><title>${esc(p)}</title>${esc(p.length > nameChars ? p.slice(0, nameChars - 1) + "…" : p)}</text>`;
+  });
+  // Activation bars on the callee while a call runs.
+  for (const m of messages) {
+    const r = rows.get(m.span_id);
+    if (m.kind === "call" && m.from !== m.to && r.end != null) {
+      svg += `<rect x="${x(m.to) - 4}" y="${top + r.start * rowH}" width="8" height="${(r.end - r.start) * rowH}" fill="${m.error ? "var(--bad-soft)" : "var(--accent-soft)"}" stroke="${m.error ? "var(--bad)" : "var(--line)"}"/>`;
+    }
+  }
+  events.forEach((e, i) => {
+    const m = e.m, y = top + i * rowH + rowH / 2, span = spans[m.span_id] || {};
+    const c = m.error ? "var(--bad)" : e.type === 1 ? "var(--muted)" : "var(--ink)";
+    const off = ms((e.t - seq.start_ns) / 1e6);
+    svg += `<text x="8" y="${y + 4}" style="fill:var(--muted);font-size:11px">+${off}</text>`;
+    const sel = m.span_id === selectedSpan ? " sel" : "";
+    const mark = marks[m.span_id];
+    const badge = mark && e.type === 0 ? ` <tspan style="fill:${mark.ok ? "var(--ok)" : "var(--bad)"};font-weight:700">[${mark.ok ? "✓" : "✗"} ${esc(mark.id)}]</tspan>` : "";
+    if (e.type === 0 && m.from === m.to) {
+      const cx = x(m.from);
+      svg += `<g class="msg${sel}" data-span="${m.span_id}" style="color:${c}"><path d="M${cx + 5},${y - 8} h28 v14 h-26" fill="none" stroke="currentColor" marker-end="url(#arr)"/>
+        <text class="label" x="${cx + 40}" y="${y + 4}" style="${m.error ? "fill:var(--bad)" : ""}"><title>${esc(m.label)} · ${ms((m.end_ns - m.start_ns) / 1e6)}</title>${esc(m.label.length > 40 ? m.label.slice(0, 39) + "…" : m.label)} <tspan style="fill:var(--muted);font-size:11px">${ms((m.end_ns - m.start_ns) / 1e6)}</tspan>${badge}</text></g>`;
+      return;
+    }
+    const from = e.type === 0 ? m.from : m.to, to = e.type === 0 ? m.to : m.from;
+    const x1 = x(from) + (x(to) > x(from) ? 5 : -5), x2 = x(to) + (x(to) > x(from) ? -5 : 5);
+    const dash = e.type === 1 ? ` stroke-dasharray="5 4"` : m.kind === "async" ? ` stroke-dasharray="2 3"` : "";
+    const head = m.kind === "async" || e.type === 1 ? "open" : "arr";
+    const label = e.type === 0 ? m.label : (m.error ? "✗ " + (span.status_message || "error") : "") + " " + ms((m.end_ns - m.start_ns) / 1e6);
+    const mid = (x1 + x2) / 2, maxChars = Math.max(10, Math.floor(Math.abs(x2 - x1) / 7));
+    svg += `<g class="msg${sel}" data-span="${m.span_id}" style="color:${c}"><line x1="${x1}" y1="${y + 4}" x2="${x2}" y2="${y + 4}" stroke="currentColor" stroke-width="${e.type === 0 ? 1.6 : 1.2}"${dash} marker-end="url(#${head})"/>
+      <text class="label" x="${mid}" y="${y - 2}" text-anchor="middle" style="${m.error ? "fill:var(--bad);" : ""}${e.type === 1 ? "fill:var(--muted);font-size:11.5px" : ""}"><title>${esc(m.label)}</title>${esc(label.trim().length > maxChars ? label.trim().slice(0, maxChars - 1) + "…" : label.trim())}${badge}</text></g>`;
+  });
+  return svg + "</svg>";
+}
+
+function spanDetails() {
+  const s = trace && trace.spans.find((sp) => sp.span_id === selectedSpan);
+  if (!s) return `<div class="details hint">Click an arrow or a bar for the span's attributes.</div>`;
+  const rows = [["service", s.service], ["kind", s.kind], ["duration", ms((s.end_ns - s.start_ns) / 1e6)], ["status", s.status + (s.status_message ? ": " + s.status_message : "")], ["source", s.source], ["span id", s.span_id], ["parent", s.parent_id || "—"]];
+  const attrs = Object.entries(s.attributes || {}), res = Object.entries(s.resource || {});
+  return `<div class="details"><h4>${esc(s.name)}</h4><table class="kv">${rows.map(([k, v]) => `<tr><td>${k}</td><td class="v">${esc(v)}</td></tr>`).join("")}
+    ${attrs.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="v">${esc(typeof v === "string" ? v : JSON.stringify(v))}</td></tr>`).join("")}
+    ${(s.events || []).map((ev) => `<tr><td>event</td><td class="v">${esc(ev.name)} ${esc(JSON.stringify(ev.attributes || {}))}</td></tr>`).join("")}
+    ${res.length ? `<tr><td>resource</td><td class="v">${esc(res.map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("  "))}</td></tr>` : ""}</table></div>`;
+}
+
+function waterfall() {
+  const spans = trace.spans, t0 = Math.min(...spans.map((s) => s.start_ns)), t1 = Math.max(...spans.map((s) => s.end_ns)), total = Math.max(1, t1 - t0);
+  const children = {}, ids = new Set(spans.map((s) => s.span_id));
+  for (const s of spans) { const p = s.parent_id && ids.has(s.parent_id) ? s.parent_id : "root"; (children[p] ||= []).push(s); }
+  const ordered = []; const walk = (id, depth) => { for (const s of (children[id] || []).sort((a, b) => a.start_ns - b.start_ns)) { ordered.push([s, depth]); walk(s.span_id, depth + 1); } };
+  walk("root", 0);
+  return `<div class="wf">${ordered.map(([s, d]) => {
+    const l = ((s.start_ns - t0) / total) * 100, w = ((s.end_ns - s.start_ns) / total) * 100;
+    return `<div class="wf-row ${s.span_id === selectedSpan ? "sel" : ""}" data-span="${s.span_id}">
+      <div class="wf-name" style="padding-left:${d * 14}px" title="${esc(s.service)}: ${esc(s.name)}"><span style="color:${colour(s.service)}">●</span> ${esc(s.name)} <span class="hint">${esc(s.service)}</span></div>
+      <div class="wf-track"><div class="wf-bar" style="left:${l}%;width:${w}%;background:${s.status === "error" ? "var(--bad)" : colour(s.service)}"></div></div>
+      <div class="wf-dur">${ms((s.end_ns - s.start_ns) / 1e6)}</div></div>`;
+  }).join("")}</div>`;
+}
+
+function flowView() {
+  const f = state.flows.find((x) => x.flow.name === selectedFlow) || state.flows[0];
+  if (!f) return `<p class="hint">No flow yet. The agent writes the flow it expects your feature to produce — services, spans, attributes, where in the code each span is made — and it appears here for you to review.</p>`;
+  selectedFlow = f.flow.name;
+  const v = f.verdict, r = f.review;
+  const byId = Object.fromEntries(v.steps.map((s) => [s.id, s]));
+  const cls = { pass: "v-pass", fail: "v-fail", running: "v-run" }[v.status] || "v-wait";
+  const head = { pass: "✓ Passed", fail: "✗ Failed", running: "… Trace arriving" }[v.status] || "○ Waiting for a run";
+  const expect = (a) => Object.entries(a || {}).map(([k, e]) => `${esc(k)} ${e === "*" ? "present" : e === "!" ? "<b>absent</b>" : typeof e === "string" && e.startsWith("re:") ? "~ " + esc(e.slice(3)) : "= " + esc(JSON.stringify(e))}`).join("<br>");
+  const status = (s) => !s ? "" : s.status === "ok" ? `<span class="badge b-ok">ok</span>` : s.status === "skipped" ? `<span class="badge b-mute">skipped</span>` : `<span class="badge ${s.status === "missing" && v.status !== "fail" ? "b-mute" : "b-bad"}">${esc(s.status.replace(/_/g, " "))}</span>`;
+  return `<div class="flow-head"><div class="title"><h3>${esc(f.flow.name)}</h3><span class="s">${esc(f.flow.description || "")}</span></div></div>
+    <div class="review"><b>Review:</b> ${r.state === "pending" ? `<span class="badge b-warn">waiting for you</span> Check that each span is in the right place and carries the right data before the test runs.` : r.state === "approved" ? `<span class="badge b-ok">approved</span>` : `<span class="badge b-warn">changes requested</span>`}
+      ${r.comment ? `<div class="hint">“${esc(r.comment)}”</div>` : ""}
+      <textarea id="comment" placeholder="Comment for the agent (what to change, where)">${esc(comment[f.flow.name] || "")}</textarea>
+      <button class="btn primary" id="approve">Approve</button> <button class="btn warn" id="changes">Request changes</button>
+      <button class="btn" id="arm" title="Count only runs from now on">Re-arm</button></div>
+    <div class="verdict ${cls}">${head} — ${esc(v.summary)}${v.trace_id ? ` · <a href="#" id="open-trace">open trace</a>` : ""}</div>
+    <table class="steps"><tr><th>#</th><th>Service</th><th>Span</th><th>Expected attributes</th><th>Code</th><th>Status</th></tr>
+    ${f.flow.steps.map((s) => { const res = byId[s.id]; return `<tr><td class="mono">${esc(s.id)}</td><td><span style="color:${colour(s.service)}">●</span> ${esc(s.service)}</td>
+      <td>${esc(s.span)}${s.kind ? ` <span class="hint">${esc(s.kind)}</span>` : ""}${s.optional ? ` <span class="badge b-mute">optional</span>` : ""}${s.error ? ` <span class="badge b-warn">expects error</span>` : ""}${s.why ? `<div class="hint">${esc(s.why)}</div>` : ""}</td>
+      <td class="mono">${expect(s.attributes)}${s.max_ms ? `<br>≤ ${s.max_ms} ms` : ""}${s.count ? `<br>count ${s.count.min ?? 0}..${s.count.max ?? "∞"}` : ""}</td>
+      <td class="mono">${esc(s.code || "")}</td><td>${status(res)}${res && res.duration_ms != null ? ` <span class="hint">${ms(res.duration_ms)}</span>` : ""}${res && res.problems && res.problems.length ? `<div class="problems">${res.problems.map(esc).join("<br>")}</div>` : ""}</td></tr>`; }).join("")}</table>
+    ${(v.unexpected_errors || []).length ? `<div class="details"><h4>Unexpected errors</h4>${v.unexpected_errors.map((e) => `<div class="problems">${esc(e.service)} · ${esc(e.span)}: ${esc(e.message)}</div>`).join("")}</div>` : ""}
+    ${(v.forbidden || []).length ? `<div class="details"><h4>Forbidden spans</h4>${v.forbidden.map((e) => `<div class="problems">${esc(e.service)} · ${esc(e.span)}</div>`).join("")}</div>` : ""}`;
+}
+
+function render() {
+  const pane = $("pane");
+  if (tab === "flow") {
+    pane.innerHTML = flowView();
+    const f = selectedFlow;
+    const c = $("comment"); if (c) c.oninput = () => (comment[f] = c.value);
+    const send = (decision) => api("POST", `/v/flows/${encodeURIComponent(f)}/review`, { decision, comment: comment[f] || "" }).then(() => { comment[f] = ""; poll(true); });
+    if ($("approve")) { $("approve").onclick = () => send("approve"); $("changes").onclick = () => send("changes"); $("arm").onclick = () => api("POST", `/v/flows/${encodeURIComponent(f)}/arm`).then(() => poll(true)); }
+    const open = $("open-trace"); if (open) open.onclick = (e) => { e.preventDefault(); selectedTrace = state.flows.find((x) => x.flow.name === f).verdict.trace_id; $("follow").checked = false; setTab("sequence"); };
+    return;
+  }
+  if (!trace) { pane.innerHTML = `<p class="hint">Waiting for the first trace. Point a service's OTLP exporter at the endpoint above, or let the agent add a pull source.</p>`; return; }
+  const s = trace.summary;
+  const title = `<div class="title"><h3>${esc(s.root || s.trace_id)}</h3><span class="s">${ms(s.duration_ms)} · ${s.spans} spans · ${s.services.length} services${s.errors ? ` · <b style="color:var(--bad)">${s.errors} errors</b>` : ""}${s.orphans ? ` · <b style="color:var(--warn)">${s.orphans} spans lost their parent (broken propagation?)</b>` : ""} · <span class="mono">${s.trace_id}</span> · <a href="${esc(state.info.jaeger_ui)}/trace/${s.trace_id}" target="_blank" rel="noopener">Jaeger ↗</a></span></div>`;
+  pane.innerHTML = title + (tab === "sequence" ? `<div class="seq-wrap">${sequenceSvg()}</div>` : waterfall()) + spanDetails();
+  for (const el of pane.querySelectorAll("[data-span]")) el.onclick = () => { selectedSpan = el.dataset.span; render(); };
+}
+
+async function poll(force) {
+  try {
+    state = await api("GET", "/v/state");
+  } catch (error) {
+    $("dot").className = "dot off";
+    $("meta").textContent = TOKEN ? "the session stopped (pane closed?)" : "open this page from the link in the dashr pane";
+    return;
+  }
+  header();
+  if ($("follow").checked && state.traces.length) {
+    const newest = state.traces[0].trace_id;
+    if (newest !== selectedTrace) { selectedTrace = newest; selectedSpan = null; }
+  }
+  if (!selectedTrace && state.traces.length) selectedTrace = state.traces[0].trace_id;
+  if (force || state.version !== lastVersion) {
+    lastVersion = state.version;
+    const typing = document.activeElement && document.activeElement.id === "comment";
+    sidebar();
+    if (!typing) await loadTrace(force);
+  }
+}
+
+for (const b of $("tabs").querySelectorAll("button")) b.onclick = () => setTab(b.dataset.tab);
+$("internal").onchange = () => render();
+$("follow").onchange = () => poll(true);
+poll(true);
+setInterval(() => poll(false), 1000);
+</script>
+</body>
+</html>
