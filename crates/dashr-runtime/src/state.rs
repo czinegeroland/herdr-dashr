@@ -1,8 +1,10 @@
 //! A running session's state and everything that changes it: the trace
-//! store fed by Jaeger and by pull sources, the flows with their review
-//! and verdicts, and the sources with their health.
+//! store fed by Jaeger and by pull sources, the flows with their
+//! verdicts, the span catalog and code root behind the Spans tab, and the
+//! sources with their health.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -10,6 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use dashr_core::catalog::{self, Catalog, CatalogEntry};
 use dashr_core::flow::{self, Candidate, Flow, Verdict, VerdictStatus};
 use dashr_core::ingest::{self, Format};
 use dashr_core::privacy::{Masker, Pseudonyms};
@@ -26,26 +29,16 @@ pub const POLL_EVERY: Duration = Duration::from_millis(1_500);
 pub const MIN_SOURCE_EVERY_SECS: u64 = 5;
 pub const TRIAL_TIMEOUT: Duration = Duration::from_secs(120);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewState {
-    Pending,
-    Approved,
-    ChangesRequested,
-}
-
+/// A file the human saved in the viewer's editor, for the agent to see.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Review {
-    pub state: ReviewState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comment: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub at_ms: Option<u64>,
+pub struct Edit {
+    pub file: String,
+    pub lines_changed: usize,
+    pub at_ms: u64,
 }
 
 pub struct FlowEntry {
     pub flow: Flow,
-    pub review: Review,
     pub armed_ms: u64,
     /// The last decided status, for notifying once per change.
     pub announced: Option<(VerdictStatus, Option<String>)>,
@@ -111,6 +104,12 @@ pub struct State {
     pub store: TraceStore,
     pub flows: BTreeMap<String, FlowEntry>,
     pub sources: BTreeMap<String, SourceEntry>,
+    pub catalog: Vec<CatalogEntry>,
+    /// The repository the Spans tab's editor works in (canonical).
+    pub code_root: Option<PathBuf>,
+    /// Whether a catalog set the root (`flow set` never replaces it then).
+    root_from_catalog: bool,
+    pub edits: Vec<Edit>,
     meta_version: u64,
     pub poll_error: Option<String>,
 }
@@ -170,9 +169,10 @@ impl Shared {
 
     // ------------------------------------------------------------ flows
 
-    /// Adds or replaces a flow. A changed flow needs review again and is
-    /// armed from now; resending the same flow keeps both.
-    pub fn set_flow(&self, flow: Flow) -> Value {
+    /// Adds or replaces a flow. A changed flow is armed from now;
+    /// resending the same flow keeps its arming. `cwd` is where the agent
+    /// ran `dashr flow set`: the code root, until a catalog names one.
+    pub fn set_flow(&self, flow: Flow, cwd: Option<&str>) -> Value {
         let now = now_ms();
         let mut state = self.lock();
         let unchanged = state.flows.get(&flow.name).is_some_and(|e| e.flow == flow);
@@ -181,46 +181,20 @@ impl Shared {
                 flow.name.clone(),
                 FlowEntry {
                     flow: flow.clone(),
-                    review: Review {
-                        state: ReviewState::Pending,
-                        comment: None,
-                        at_ms: None,
-                    },
                     armed_ms: now,
                     announced: None,
                 },
             );
             state.touch();
         }
-        drop(state);
-        json!({"flow": flow.name, "changed": !unchanged, "review": self.flow_view(&flow.name, true).and_then(|v| v.get("review").cloned())})
-    }
-
-    pub fn review(
-        &self,
-        name: &str,
-        decision: &str,
-        comment: Option<String>,
-    ) -> Result<(), String> {
-        let state_value = match decision {
-            "approve" | "approved" => ReviewState::Approved,
-            "changes" | "request_changes" | "changes_requested" => ReviewState::ChangesRequested,
-            other => return Err(format!("unknown decision {other:?}; approve or changes")),
-        };
-        let mut state = self.lock();
-        let entry = state
-            .flows
-            .get_mut(name)
-            .ok_or_else(|| format!("no flow {name:?}"))?;
-        entry.review = Review {
-            state: state_value,
-            comment: comment
-                .map(|c| c.trim().to_owned())
-                .filter(|c| !c.is_empty()),
-            at_ms: Some(now_ms()),
-        };
-        state.touch();
-        Ok(())
+        if !state.root_from_catalog
+            && let Some(root) = cwd.and_then(|c| canonical_dir(Path::new(c)))
+            && state.code_root.as_ref() != Some(&root)
+        {
+            state.code_root = Some(root);
+            state.touch();
+        }
+        json!({"flow": flow.name, "changed": !unchanged, "armed_ms": state.flows[&flow.name].armed_ms})
     }
 
     /// Counts only traces from now on.
@@ -269,16 +243,16 @@ impl Shared {
         Some(self.verdict_locked(&state, entry, now_ms()))
     }
 
-    /// A flow with its review and verdict; `brief` leaves out the steps.
+    /// A flow with its verdict; `brief` leaves out the steps.
     pub fn flow_view(&self, name: &str, brief: bool) -> Option<Value> {
         let state = self.lock();
         let entry = state.flows.get(name)?;
         let verdict = self.verdict_locked(&state, entry, now_ms());
         Some(if brief {
-            json!({"name": name, "review": entry.review, "armed_ms": entry.armed_ms,
+            json!({"name": name, "armed_ms": entry.armed_ms,
                    "status": verdict.status, "settled": verdict.settled, "summary": verdict.summary})
         } else {
-            json!({"flow": entry.flow, "review": entry.review, "armed_ms": entry.armed_ms, "verdict": verdict})
+            json!({"flow": entry.flow, "armed_ms": entry.armed_ms, "verdict": verdict})
         })
     }
 
@@ -311,6 +285,124 @@ impl Shared {
             }
         }
         out
+    }
+
+    // ------------------------------------------------- spans and code
+
+    /// Replaces the span catalog. Its `root` (relative to `cwd`), else
+    /// `cwd`, becomes the code root.
+    pub fn set_catalog(&self, catalog: Catalog, cwd: Option<&str>) -> Result<Value, String> {
+        let base = cwd.map(PathBuf::from);
+        let root = match (&catalog.root, &base) {
+            (Some(root), Some(base)) => Some(base.join(root)),
+            (Some(root), None) => Some(PathBuf::from(root)),
+            (None, base) => base.clone(),
+        };
+        let root = match root {
+            Some(root) => Some(
+                canonical_dir(&root)
+                    .ok_or_else(|| format!("code root {}: not a directory", root.display()))?,
+            ),
+            None => None,
+        };
+        let mut state = self.lock();
+        let count = catalog.spans.len();
+        state.catalog = catalog.spans;
+        if let Some(root) = root {
+            state.code_root = Some(root);
+            state.root_from_catalog = true;
+        }
+        state.touch();
+        let root = state.code_root.as_ref().map(|r| r.display().to_string());
+        drop(state);
+        let located = self
+            .inventory()
+            .iter()
+            .filter(|i| i.planned && i.code.is_some())
+            .count();
+        Ok(json!({"spans": count, "located": located, "code_root": root}))
+    }
+
+    fn inventory(&self) -> Vec<catalog::SpanInfo> {
+        let state = self.lock();
+        let traces = state.store.all();
+        let flows: Vec<&Flow> = state.flows.values().map(|e| &e.flow).collect();
+        catalog::inventory(&state.catalog, &flows, &traces)
+    }
+
+    /// Every span the code has, raw: the human's view.
+    pub fn spans_for_viewer(&self) -> Value {
+        let root = self.lock().code_root.clone();
+        let mut spans = serde_json::to_value(self.inventory()).unwrap_or_default();
+        // Land the editor on the function's line when only its name is known.
+        if let (Some(root), Some(items)) = (root.as_deref(), spans.as_array_mut()) {
+            let mut cache: BTreeMap<String, Option<String>> = BTreeMap::new();
+            for item in items {
+                let code = &mut item["code"];
+                let (Some(file), None, Some(function)) = (
+                    code.get("file").and_then(Value::as_str).map(str::to_owned),
+                    code.get("line").and_then(Value::as_u64),
+                    code.get("function")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                ) else {
+                    continue;
+                };
+                let content = cache.entry(file.clone()).or_insert_with(|| {
+                    crate::code::read(Some(root), &file).ok().map(|f| f.content)
+                });
+                if let Some(line) = content
+                    .as_deref()
+                    .and_then(|c| catalog::find_function(c, &function))
+                {
+                    code["line"] = json!(line);
+                }
+            }
+        }
+        spans
+    }
+
+    /// Every span the code has, masked: span names and attribute values
+    /// may carry data (DASHR-AGENT-004).
+    pub fn spans_for_agent(&self) -> Value {
+        let mut p = Pseudonyms::default();
+        Value::Array(
+            self.inventory()
+                .into_iter()
+                .map(|info| {
+                    json!({
+                        "service": info.service,
+                        "span": self.masker.text(&info.span, &mut p),
+                        "kind": info.kind,
+                        "code": info.code,
+                        "located_by": info.located_by,
+                        "planned": info.planned,
+                        "seen": info.seen,
+                        "errors": info.errors,
+                        "last_duration_ms": info.last_duration_ms,
+                        "last_trace_id": info.last_trace_id,
+                        "attributes": self.masker.attributes(&info.last_attributes, &mut p),
+                        "expected_attributes": info.expected_attributes,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    pub fn code_root(&self) -> Option<PathBuf> {
+        self.lock().code_root.clone()
+    }
+
+    pub fn record_edit(&self, file: &str, lines_changed: usize) {
+        let mut state = self.lock();
+        let at_ms = now_ms();
+        state.edits.retain(|e| e.file != file);
+        state.edits.push(Edit {
+            file: file.to_owned(),
+            lines_changed,
+            at_ms,
+        });
+        state.touch();
     }
 
     // ---------------------------------------------------------- sources
@@ -611,6 +703,9 @@ impl Shared {
             "flows": flows,
             "sources": state.sources.values().map(|e| json!({"spec": e.spec, "health": e.health})).collect::<Vec<_>>(),
             "poll_error": state.poll_error,
+            "code_root": state.code_root,
+            "catalog_spans": state.catalog.len(),
+            "edits": state.edits,
         })
     }
 
@@ -639,8 +734,16 @@ impl Shared {
             "flows": flows,
             "sources": sources,
             "jaeger_error": state.poll_error,
+            "code_root": state.code_root,
+            "catalog_spans": state.catalog.len(),
+            "human_edits": state.edits,
         })
     }
+}
+
+/// A directory, canonical; `None` when it is not one.
+fn canonical_dir(path: &Path) -> Option<PathBuf> {
+    path.canonicalize().ok().filter(|p| p.is_dir())
 }
 
 /// Sleeps `duration` unless a flag is raised first; `false` when one was.

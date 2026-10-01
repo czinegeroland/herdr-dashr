@@ -7,7 +7,7 @@
 #   scripts/e2e/run.sh [path/to/dashr]
 #
 # Scenarios: AC-SESSION, AC-OTLP, AC-MASK, AC-FLOW, AC-SOURCE, AC-FORMATS,
-# AC-VIEW, AC-HERDR, AC-REAP, AC-DOCTOR and AC-LAUNCHER.
+# AC-VIEW, AC-SPANS, AC-HERDR, AC-REAP, AC-DOCTOR and AC-LAUNCHER.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -131,7 +131,7 @@ grep -q '<customer_email#1>' "$WORK/trace.json" || fail "no pseudonym where the 
 curl -s -H "x-dashr-viewer: $VTOKEN" "$API/v/trace/$TRACE" | grep -q 'ann@example.com' || fail "the human's viewer does not show the real value"
 ok "the agent sees <customer_email#1>; the viewer shows the real address"
 
-log "AC-FLOW: the human reviews the flow, the run is judged against it"
+log "AC-FLOW: a flow is used as soon as it is set"
 cat >"$WORK/checkout.json" <<'EOF'
 {"name": "checkout", "description": "An order reserves stock and publishes an event",
  "match": {"attributes": {"test.run": "r-2"}},
@@ -146,21 +146,23 @@ cat >"$WORK/checkout.json" <<'EOF'
  ],
  "settle_secs": 3}
 EOF
-"${D[@]}" flow set "$WORK/checkout.json" | grep -q '"pending"' || fail "a new flow is not pending review"
-set +e; "${D[@]}" flow wait checkout --review --timeout 2 >/dev/null; code=$?; set -e
-[ "$code" = 4 ] || fail "flow wait --review did not time out while pending (exit $code)"
-curl -s -X POST -H "x-dashr-viewer: $VTOKEN" "$API/v/flows/checkout/review" -d '{"decision":"changes","comment":"add the warehouse"}' >/dev/null
-set +e; "${D[@]}" flow wait checkout --review --timeout 10 >"$WORK/review.json"; code=$?; set -e
-[ "$code" = 3 ] && grep -q 'add the warehouse' "$WORK/review.json" || fail "changes requested did not reach the agent (exit $code)"
-ok "a new flow waits for review; the human's 'changes requested' and comment reach the agent (exit 3)"
+"${D[@]}" flow set "$WORK/checkout.json" >"$WORK/set.json" || fail "the flow was refused"
+grep -q '"changed": true' "$WORK/set.json" || fail "a new flow is not taken"
+grep -qi 'review' "$WORK/set.json" && fail "flow set still talks about a review"
+set +e; "${D[@]}" flow wait checkout --timeout 2 >"$WORK/early.json"; code=$?; set -e
+[ "$code" = 4 ] && grep -q '"waiting"' "$WORK/early.json" || fail "flow wait before a run did not time out waiting (exit $code)"
+set +e; "${D[@]}" flow wait checkout --review --timeout 2 >/dev/null 2>&1; code=$?; set -e
+[ "$code" = 2 ] || fail "flow wait --review is still accepted (exit $code)"
+"${D[@]}" flow set "$WORK/checkout.json" | grep -q '"changed": false' || fail "resending the same flow re-armed it"
 python3 - "$WORK/checkout.json" <<'EOF'
 import json, sys
-f = json.load(open(sys.argv[1])); f["description"] += " (reviewed)"
+f = json.load(open(sys.argv[1])); f["description"] += " (v2)"
 json.dump(f, open(sys.argv[1], "w"))
 EOF
 "${D[@]}" flow set "$WORK/checkout.json" | grep -q '"changed": true' || fail "a changed flow is not taken"
+ok "no review: a flow counts from flow set; an early wait times out (exit 4); --review is gone; the same flow keeps its arming, a changed one is taken"
 
-log "AC-VIEW: the human's browser shows the flow, approves it, and draws the sequence"
+log "AC-VIEW: the human's browser shows the flow, its verdicts and the sequence"
 CHROME="${DASHR_E2E_CHROME:-$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)}"
 [ -z "$CHROME" ] && [ -x /opt/pw-browsers/chromium-1194/chrome-linux/chrome ] && CHROME=/opt/pw-browsers/chromium-1194/chrome-linux/chrome
 [ -n "$CHROME" ] || fail "no Chrome or Chromium for the viewer scenario"
@@ -171,11 +173,9 @@ js() { "$PY" "$ROOT/scripts/e2e/cdp_eval.py" 9321 127.0.0.1 "$1"; }
 shot() { "$PY" "$ROOT/scripts/e2e/cdp_screenshot.py" 9321 127.0.0.1 "$SHOTS/$1.png" || echo "  (screenshot $1 failed)"; }
 wait_for 30 "js 'document.querySelectorAll(\"[data-flow]\").length' | grep -q 1" || fail "the viewer shows no flow"
 js 'document.querySelector("[data-flow]").click(), 1' >/dev/null
-wait_for 10 "js 'document.getElementById(\"approve\") ? 1 : 0' | grep -q 1" || fail "the flow tab has no approve button"
-shot 1-flow-review
-js 'document.getElementById("approve").click(), 1' >/dev/null
-"${D[@]}" flow wait checkout --review --timeout 20 >/dev/null || fail "approving in the browser did not reach the agent"
-ok "the human approved the flow with the viewer's button; flow wait --review exits 0"
+wait_for 10 "js 'document.querySelectorAll(\"table.steps tr\").length' | grep -q 6" || fail "the flow tab does not show the five steps"
+js 'document.getElementById("approve") || document.getElementById("changes") ? 1 : 0' | grep -q 0 || fail "the flow tab still offers a review"
+shot 1-flow
 
 "${D[@]}" flow arm checkout >/dev/null
 drive r-2 3 ann@example.com >/dev/null
@@ -210,6 +210,83 @@ shot 2-flow-failed
 js 'document.querySelector("[data-tab=sequence]").click(), 1' >/dev/null
 sleep 2
 js 'document.querySelectorAll("svg g.msg").length' | grep -qv '^0$' || fail "the viewer drew no sequence"
+ok "the viewer shows the flow's steps without a review, the failure, and the sequence"
+
+log "AC-SPANS: every span the code has, and its code, editable in the viewer"
+REPO="$WORK/repo"
+mkdir -p "$REPO/src"
+cat >"$REPO/src/stock.py" <<'EOF'
+import json
+
+
+def refund_order(order):
+    pass
+
+
+def reserve_stock(order, items):
+    # the span "reserve stock" is made here
+    return items
+EOF
+echo '{"secret": true}' >"$WORK/outside.json"
+ln -s "$WORK/outside.json" "$REPO/src/link.json"
+cat >"$WORK/catalog.json" <<'EOF'
+{"spans": [
+  {"service": "stock-api", "span": "reserve stock", "kind": "internal", "file": "src/stock.py", "function": "reserve_stock",
+   "why": "one reservation per order", "attributes": ["stock.requested"]},
+  {"service": "orders-api", "span": "refund order", "file": "src/stock.py", "function": "refund_order", "why": "planned, not built yet"}
+]}
+EOF
+(cd "$REPO" && dashr_ spans set "$WORK/catalog.json") >"$WORK/spans-set.json" || fail "spans set was refused"
+python3 - "$WORK/spans-set.json" "$REPO" <<'EOF' || { cat "$WORK/spans-set.json"; fail "spans set did not take the repository as the code root"; }
+import json, os, sys
+r = json.load(open(sys.argv[1]))
+assert r["spans"] == 2 and r["located"] >= 2 and r["code_root"] == os.path.realpath(sys.argv[2]), r
+EOF
+"${D[@]}" spans >"$WORK/spans.json"
+python3 - "$WORK/spans.json" <<'EOF' || { cat "$WORK/spans.json"; fail "the agent's span inventory is wrong"; }
+import json, sys
+spans = {(s["service"], s["span"]): s for s in json.load(open(sys.argv[1]))}
+reserve = spans[("stock-api", "reserve stock")]
+assert reserve["planned"] and reserve["seen"] >= 1 and reserve["located_by"] == "catalog", reserve
+refund = spans[("orders-api", "refund order")]
+assert refund["planned"] and refund["seen"] == 0, refund
+assert spans[("orders-api", "POST /orders")]["located_by"] == "flow", "the flow step's code locates its span"
+assert spans[("orders-api", "validate order")]["attributes"]["customer.email"].startswith("<"), "attributes are masked"
+EOF
+grep -q 'ann@example.com' "$WORK/spans.json" && fail "an email reached the agent through dashr spans"
+V=(-H "x-dashr-viewer: $VTOKEN")
+LINE="$(curl -s "${V[@]}" "$API/v/spans" | json 'next(s["code"]["line"] for s in d if s["span"] == "reserve stock")')"
+[ "$LINE" = 8 ] || fail "the function's line was not found (got $LINE)"
+curl -s "${V[@]}" "$API/v/code?path=src/stock.py" >"$WORK/code.json"
+[ "$(json 'd["path"]' <"$WORK/code.json")" = src/stock.py ] && [ "$(json 'd["language"]' <"$WORK/code.json")" = python ] || fail "the viewer cannot read the span's file"
+for bad in "../outside.json" "src/../../outside.json" "$WORK/outside.json" "/etc/passwd" "src/link.json"; do
+  code="$(curl -s -o "$WORK/bad.json" -w '%{http_code}' -G "${V[@]}" "$API/v/code" --data-urlencode "path=$bad")"
+  [ "$code" = 403 ] || [ "$code" = 404 ] || fail "$bad: read outside the code root (HTTP $code)"
+  grep -q secret "$WORK/bad.json" && fail "$bad: a file outside the code root leaked"
+done
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${V[@]}" "$API/v/code" -d '{"path":"../outside.json","content":"x","version":"0"}')" = 403 ] || fail "a write outside the code root was not refused"
+grep -q secret "$WORK/outside.json" || fail "a file outside the code root was changed"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$API/v/code?path=src/stock.py")" = 401 ] || fail "the code is readable without the viewer token"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${V[@]}" "$API/v/code" -d '{"path":"src/stock.py","content":"x","version":"stale"}')" = 409 ] || fail "a stale save was not refused"
+grep -q 'def reserve_stock' "$REPO/src/stock.py" || fail "a stale save changed the file"
+js 'document.querySelector("[data-tab=spans]").click(), 1' >/dev/null
+wait_for 15 "js 'document.querySelectorAll(\"#span-list [data-key]\").length' | grep -qv '^0$'" || fail "the Spans tab lists no spans"
+js '[...document.querySelectorAll("#span-list [data-key]")].map((e) => e.textContent).join("|")' >"$WORK/span-list.txt"
+grep -q 'refund order' "$WORK/span-list.txt" && grep -q 'not seen' "$WORK/span-list.txt" || fail "a planned span that never ran is not listed"
+js '[...document.querySelectorAll("#span-list [data-key]")].find((e) => e.textContent.includes("reserve stock")).click(), 1' >/dev/null
+wait_for 20 "js 'editor && (editor.getValue ? editor.getValue() : editor.value).includes(\"def reserve_stock\") ? 1 : 0' | grep -q 1" \
+  || { js '[monacoState, selectedKey, document.getElementById("code-path").textContent, document.getElementById("editor").innerHTML.slice(0, 300)].join(" | ")'; fail "clicking the span did not open its code"; }
+js 'document.getElementById("code-vscode").href' | grep -q "^vscode://file/.*/src/stock.py:8$" || fail "no Open in VS Code link to the span's line"
+EDITOR_KIND="$(js 'editor.getValue ? "Monaco" : "plain"')"
+shot 4-spans-code
+js 'const t = "    # checked in the viewer\n"; if (editor.getValue) { editor.executeEdits("e2e", [{ range: new monaco.Range(10, 1, 10, 1), text: t }]); } else { const l = editor.value.split("\n"); l.splice(9, 0, t.slice(0, -1)); editor.value = l.join("\n"); editor.dispatchEvent(new Event("input")); } 1' >/dev/null
+js 'document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })), 1' >/dev/null
+wait_for 10 "grep -q 'checked in the viewer' '$REPO/src/stock.py'" || { js 'document.getElementById("code-state").textContent'; fail "Ctrl+S did not save the file"; }
+grep -q 'def reserve_stock' "$REPO/src/stock.py" || fail "the save broke the file"
+wait_for 5 "js 'document.getElementById(\"code-state\").textContent' | grep -q saved" || fail "the editor does not say it saved"
+"${D[@]}" status | json '[e["file"] for e in d["human_edits"]]' | grep -q 'src/stock.py' || fail "the human's edit is not reported to the agent"
+shot 5-spans-saved
+ok "spans set makes the repository the code root; the Spans tab lists planned and seen spans, opens the code at the function ($EDITOR_KIND editor) and saves with Ctrl+S; the agent sees the edit; stale saves and paths outside the root are refused"
 
 log "AC-SOURCE: a pull source joins a Step Functions run (X-Ray) to the local trace"
 TRACE3="$(drive r-3 2 ann@example.com | json 'd["trace_id"]')"
@@ -308,8 +385,11 @@ herdr pane read "$PANE" --source visible | grep -q 'Jaeger' || fail "the pane do
 HSESSION="$(json 'd["session"]' <"$WORK/hwait.json")"
 HCONTAINER="dashr-$HSESSION"
 "${AGENT_ENV[@]}" "$ROOT/bin/dashr" flow set "$WORK/checkout.json" >/dev/null || fail "the AI session cannot drive the pane's session"
-wait_for 15 "herdr pane read $PANE --source visible | grep -q 'waiting for your review'" || fail "the pane does not say a flow waits for review"
-ok "the pane opened beside the AI session, shows the viewer and Jaeger links, and that the flow waits for review"
+wait_for 15 "herdr pane read $PANE --source visible | grep -q 'checkout: waiting for a run'" || fail "the pane does not show the flow's state"
+herdr pane read "$PANE" --source visible | grep -qi 'review' && fail "the pane still mentions a review"
+herdr pane read "$PANE" --source visible | grep -Eq '^ *http://127\.0\.0\.1:[0-9]+/#[0-9a-f]{12} *$' \
+  || { herdr pane read "$PANE" --source visible; fail "the viewer link is not whole on one line of the pane"; }
+ok "the pane opened beside the AI session, shows the whole viewer link on one line, the Jaeger link and the flow's state"
 herdr pane close "$PANE" >/dev/null
 wait_for 30 "! docker ps -a --format '{{.Names}}' | grep -q $HCONTAINER" || fail "closing the pane left Jaeger running"
 wait_for 10 "[ ! -e $HSTATE/sessions/$HSESSION.json ]" || fail "closing the pane left its session record"

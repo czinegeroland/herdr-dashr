@@ -2,8 +2,8 @@
 //!
 //! The agent writes a flow from the code it just instrumented: the steps in
 //! order — which service, which span, which attributes with which values,
-//! and where in the code each span is made. The human reviews it in the
-//! browser before the test (DASHR-FLOW-002). When the feature runs, every
+//! and where in the code each span is made (the viewer opens that code,
+//! DASHR-VIEW-005). When the feature runs, every
 //! trace that arrived since the flow was armed is matched against it, and
 //! the best one becomes the verdict (DASHR-FLOW-003): each step ok,
 //! missing, out of order, wrong, failed or slow, with the actual values
@@ -118,10 +118,10 @@ pub struct Step {
     /// How many spans may match: exactly one call, no retries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<Count>,
-    /// Where the span is created (`path/file.py:function`), for review.
+    /// Where the span is created (`path/file.py:function`): the viewer opens it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
-    /// Why the span is there, for review.
+    /// Why the span is there, shown beside it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
 }

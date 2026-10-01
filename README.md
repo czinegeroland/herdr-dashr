@@ -6,8 +6,8 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 **End-to-end testing by traces.** Your AI agent instruments the feature you
-just built with OpenTelemetry, you review the spans it plans, and every
-service's spans — local, AWS X-Ray, Azure, Google Cloud, Jaeger, Zipkin —
+just built with OpenTelemetry, you browse every span and the code that
+makes it (and edit it, right there), and every service's spans — local, AWS X-Ray, Azure, Google Cloud, Jaeger, Zipkin —
 meet in one live sequence diagram that the agent checks against the flow
 the feature should produce.
 
@@ -21,9 +21,11 @@ as one trace and tells you which step failed, where, and why.
 1. **Instrument.** The agent adds spans at your feature's business steps
    (`reserve stock`, `charge card`) with the data that proves each step did
    the right thing, on top of the language's automatic instrumentation.
-2. **Review.** It writes the *flow*: the trace the feature should produce —
-   services, spans, attributes, expected values, and where in the code each
-   span is made. You approve it, or ask for changes, in the browser.
+2. **Spans and flow.** It lists the spans it added and where each is made,
+   and writes the *flow*: the trace the feature should produce — services,
+   spans, attributes, expected values. The viewer's **Spans** tab shows
+   every span the code has; click one to open its code in a VS Code-style
+   editor, change it and save (or jump to VS Code).
 3. **Connect.** Local services export straight to the session's Jaeger.
    Remote ones are pulled from wherever they report — `aws xray`,
    `az monitor`, Cloud Trace, a team Jaeger or Tempo — through commands the
@@ -35,7 +37,9 @@ as one trace and tells you which step failed, where, and why.
    number that must not be recorded), `error` or `slow` — live in your
    browser, as JSON for the agent.
 
-![The flow review: the steps the agent planned, with code locations, and the verdict of a failing run](https://raw.githubusercontent.com/czinegeroland/herdr-dashr/main/docs/images/flow.png)
+![The Spans tab: every span the code has, grouped by service; clicking one opens its code at the line that makes it, editable and saved from the browser](https://raw.githubusercontent.com/czinegeroland/herdr-dashr/main/docs/images/spans.png)
+
+![The Flow tab: the steps the agent expects, with code locations, and the verdict of a failing run](https://raw.githubusercontent.com/czinegeroland/herdr-dashr/main/docs/images/flow.png)
 
 ## Quickstart
 
@@ -57,8 +61,10 @@ Without Herdr: `npm install -g herdr-dashr`, then `dashr serve`.
 - A **Jaeger** container per pane, receiving OTLP on `4317` (gRPC) and
   `4318` (HTTP), on loopback, read-only, in memory. Close the pane and every
   span is gone.
-- A **live viewer**: sequence diagram, waterfall, flow review, sources'
-  health, span details, and a link to the same trace in Jaeger's UI.
+- A **live viewer**: sequence diagram, waterfall, flow verdicts, the spans
+  inventory with a code editor, sources' health, span details, and a link
+  to the same trace in Jaeger's UI. The editor reads and writes only files
+  under the repository the agent works in.
 - **Pull sources**: `dashr source add aws --format xray -- <command>` runs
   the command every few seconds with the time window in `DASHR_SINCE` /
   `DASHR_UNTIL`. Formats: X-Ray, Application Insights / Log Analytics,
@@ -72,6 +78,7 @@ Without Herdr: `npm install -g herdr-dashr`, then `dashr serve`.
 dashr serve                       run a session without Herdr
 dashr wait --session <pane>       wait for a session; print endpoints and OTEL_* env
 dashr env                         export OTEL_* for a local service
+dashr spans [set catalog.json]    every span the code has; set where each is made
 dashr flow set|list|show|arm|wait|rm
 dashr source add|list|rm
 dashr traces [--since 10m] [--service S] [--attr k=v] [--errors]

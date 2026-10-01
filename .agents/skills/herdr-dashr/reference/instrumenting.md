@@ -2,7 +2,7 @@
 
 The goal is a trace that tells the story of the feature: which service
 did what, in which order, with which data, and where it failed. Instrument
-for the human's review and the flow check, not for coverage.
+for the human reading it and for the flow check, not for coverage.
 
 ## What to add
 

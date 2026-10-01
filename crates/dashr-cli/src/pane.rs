@@ -74,10 +74,7 @@ pub fn render(out: &mut impl Write, running: &Running, status: &Value) {
     let _ = writeln!(out, "\x1b[1mdashr\x1b[0m  trace session");
     let _ = writeln!(out);
     let _ = writeln!(out, "{}", running.viewer_url);
-    let _ = writeln!(
-        out,
-        "\x1b[2mCtrl-click: sequence diagrams, flow review\x1b[0m"
-    );
+    let _ = writeln!(out, "\x1b[2mCtrl-click: sequence, flows, spans\x1b[0m");
     let _ = writeln!(out);
     let _ = writeln!(out, "Jaeger  {}", running.record.jaeger_ui());
     let _ = writeln!(out, "OTLP    {} (HTTP)", running.record.otlp_http());
@@ -102,12 +99,9 @@ pub fn render(out: &mut impl Write, running: &Running, status: &Value) {
     }
     for flow in status["flows"].as_array().into_iter().flatten() {
         let name = flow["name"].as_str().unwrap_or_default();
-        let review = flow["review"]["state"].as_str().unwrap_or_default();
-        let line = match (review, flow["status"].as_str().unwrap_or_default()) {
-            ("pending", _) => format!("\x1b[33m⏳ {name}: waiting for your review\x1b[0m"),
-            ("changes_requested", _) => format!("\x1b[33m✎ {name}: changes requested\x1b[0m"),
-            (_, "pass") => format!("\x1b[32m✓ {name}: pass\x1b[0m"),
-            (_, "fail") => format!(
+        let line = match flow["status"].as_str().unwrap_or_default() {
+            "pass" => format!("\x1b[32m✓ {name}: pass\x1b[0m"),
+            "fail" => format!(
                 "\x1b[31m✗ {name}: {}\x1b[0m",
                 flow["summary"]
                     .as_str()
@@ -116,10 +110,19 @@ pub fn render(out: &mut impl Write, running: &Running, status: &Value) {
                     .take(50)
                     .collect::<String>()
             ),
-            (_, "running") => format!("… {name}: trace arriving"),
+            "running" => format!("… {name}: trace arriving"),
             _ => format!("○ {name}: waiting for a run"),
         };
         let _ = writeln!(out, "{line}");
+    }
+    for edit in status["human_edits"].as_array().into_iter().flatten() {
+        let _ = writeln!(
+            out,
+            "\x1b[36m✎ {}\x1b[0m: {} lines, {}",
+            edit["file"].as_str().unwrap_or_default(),
+            edit["lines_changed"],
+            ago(edit["at_ms"].as_u64())
+        );
     }
     for source in status["sources"].as_array().into_iter().flatten() {
         let name = source["spec"]["name"].as_str().unwrap_or_default();
@@ -223,33 +226,13 @@ pub fn traces(paths: &Paths, config: &Config) -> Result<(), String> {
     {
         let _ = herdr.call(&argv::pane_resize(&pane, "right", amount));
     }
+    // Nothing waits on the human: the pane is idle once Jaeger runs.
+    let _ = herdr.report_agent(&pane, AgentState::Idle, None);
     let mut missing = 0;
-    let mut reported = String::new();
     let mut tick = 0u64;
     while !stop.load(Ordering::SeqCst) {
         let status = running.shared.status();
         render(&mut std::io::stdout(), &running, &status);
-        // The pane turns blocked while a flow waits for the human's review.
-        let pending: Vec<&str> = status["flows"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|f| f["review"]["state"] == "pending")
-            .filter_map(|f| f["name"].as_str())
-            .collect();
-        let report = if pending.is_empty() {
-            String::new()
-        } else {
-            format!("review flow {}", pending.join(", "))
-        };
-        if report != reported {
-            let _ = if report.is_empty() {
-                herdr.report_agent(&pane, AgentState::Idle, None)
-            } else {
-                herdr.report_agent(&pane, AgentState::Blocked, Some(&report))
-            };
-            reported = report;
-        }
         for (name, status, summary) in running.shared.changed_verdicts() {
             let title = match status {
                 VerdictStatus::Pass => format!("dashr: {name} passed"),

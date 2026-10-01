@@ -2,8 +2,7 @@
 //!
 //! Every answer is JSON on stdout (the sequence of a trace is text, which
 //! reads better), errors go to stderr. Exit codes: 0 done or passed, 1 the
-//! flow failed, 3 the human asked for changes, 4 timed out, 5 any other
-//! error, 2 a bad command line.
+//! flow failed, 4 timed out, 5 any other error, 2 a bad command line.
 
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +16,6 @@ use crate::client::{Client, connect};
 use crate::jaeger_env;
 
 pub const EXIT_FAILED: u8 = 1;
-pub const EXIT_CHANGES: u8 = 3;
 pub const EXIT_TIMEOUT: u8 = 4;
 
 pub type Outcome = Result<u8, String>;
@@ -64,8 +62,8 @@ pub fn wait(paths: &Paths, session: Option<&str>, timeout: u64) -> Outcome {
                 "otlp": {"http": record.otlp_http(), "grpc": record.otlp_grpc()},
                 "jaeger_ui": record.jaeger_ui(),
                 "env": env,
-                "viewer": "the human Ctrl-clicks the viewer link in the dashr pane (sequence diagrams, flow review); Jaeger's UI is linked there too",
-                "next": "instrument the feature, then `dashr flow set` the expected flow for the human to review"
+                "viewer": "the human Ctrl-clicks the viewer link in the dashr pane (sequence diagrams, flow verdicts, every span with its code); Jaeger's UI is linked there too",
+                "next": "instrument the feature, `dashr spans set` the spans you added and where, `dashr flow set` the flow the feature should produce, then run it and `dashr flow wait`"
             }));
             return Ok(0);
         }
@@ -162,6 +160,13 @@ pub fn trace(paths: &Paths, session: Option<&str>, id: &str, json_out: bool) -> 
     Ok(0)
 }
 
+/// Where the agent runs: the repository the Spans tab's editor opens.
+fn cwd_query() -> String {
+    std::env::current_dir()
+        .map(|dir| format!("?cwd={}", encode(&dir.to_string_lossy())))
+        .unwrap_or_default()
+}
+
 pub fn flow_set(paths: &Paths, session: Option<&str>, file: &Path) -> Outcome {
     let bytes = read_input(file)?;
     let name = serde_json::from_slice::<Value>(&bytes)
@@ -170,12 +175,33 @@ pub fn flow_set(paths: &Paths, session: Option<&str>, file: &Path) -> Outcome {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or("the flow needs a \"name\"")?;
-    let mut answer =
-        connect(paths, session)?.send("PUT", &format!("flows/{}", encode(&name)), &bytes)?;
+    let path = format!("flows/{}{}", encode(&name), cwd_query());
+    let mut answer = connect(paths, session)?.send("PUT", &path, &bytes)?;
     answer["next"] = Value::String(format!(
-        "ask the human to review flow {name:?} in the viewer, then `dashr flow wait {name} --review`"
+        "run the feature (or ask the human to), then `dashr flow wait {name}`"
     ));
     print(&answer);
+    Ok(0)
+}
+
+/// `dashr spans set`: the spans the agent added and where they are made.
+pub fn spans_set(paths: &Paths, session: Option<&str>, file: &Path) -> Outcome {
+    let bytes = read_input(file)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| "the catalog is not UTF-8")?;
+    dashr_core::catalog::Catalog::parse(text)?;
+    let mut answer =
+        connect(paths, session)?.send("PUT", &format!("catalog{}", cwd_query()), &bytes)?;
+    answer["viewer"] = Value::String(
+        "the human sees every span in the viewer's Spans tab and can open and edit its code there"
+            .into(),
+    );
+    print(&answer);
+    Ok(0)
+}
+
+/// `dashr spans`: every span the code has, planned and observed (masked).
+pub fn spans_list(paths: &Paths, session: Option<&str>) -> Outcome {
+    print(&connect(paths, session)?.get("spans")?);
     Ok(0)
 }
 
@@ -204,52 +230,32 @@ fn sequence_of(client: &Client, trace_id: Option<&str>) -> Option<String> {
     trace["sequence"].as_str().map(str::to_owned)
 }
 
-/// Waits for the human's review, or for the verdict.
-pub fn flow_wait(
-    paths: &Paths,
-    session: Option<&str>,
-    name: &str,
-    review: bool,
-    timeout: u64,
-) -> Outcome {
+/// Waits for the verdict: a failure, or a pass that has settled.
+pub fn flow_wait(paths: &Paths, session: Option<&str>, name: &str, timeout: u64) -> Outcome {
     let client = connect(paths, session)?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let path = format!("flows/{}", encode(name));
     loop {
         let view = client.get(&path)?;
-        if review {
-            let state = view["review"]["state"].as_str().unwrap_or_default();
-            if state != "pending" {
-                print(&json!({"flow": name, "review": view["review"]}));
-                return Ok(if state == "approved" { 0 } else { EXIT_CHANGES });
+        let verdict = &view["verdict"];
+        let status = verdict["status"].as_str().unwrap_or_default();
+        let settled = verdict["settled"].as_bool().unwrap_or(false);
+        let decided = status == "fail" || (status == "pass" && settled);
+        let timed_out = !decided && Instant::now() > deadline;
+        if decided || timed_out {
+            let mut out = verdict.clone();
+            if timed_out {
+                out["timed_out"] = Value::Bool(true);
             }
-        } else {
-            let verdict = &view["verdict"];
-            let status = verdict["status"].as_str().unwrap_or_default();
-            let settled = verdict["settled"].as_bool().unwrap_or(false);
-            if status == "fail" || (status == "pass" && settled) {
-                let mut out = verdict.clone();
-                if let Some(sequence) = sequence_of(&client, verdict["trace_id"].as_str()) {
-                    out["sequence"] = Value::String(sequence);
-                }
-                print(&out);
-                return Ok(if status == "pass" { 0 } else { EXIT_FAILED });
-            }
-        }
-        if Instant::now() > deadline {
-            let mut out = if review {
-                json!({"flow": name, "review": view["review"]})
-            } else {
-                view["verdict"].clone()
-            };
-            out["timed_out"] = Value::Bool(true);
-            if !review
-                && let Some(sequence) = sequence_of(&client, view["verdict"]["trace_id"].as_str())
-            {
+            if let Some(sequence) = sequence_of(&client, verdict["trace_id"].as_str()) {
                 out["sequence"] = Value::String(sequence);
             }
             print(&out);
-            return Ok(EXIT_TIMEOUT);
+            return Ok(match (timed_out, status) {
+                (true, _) => EXIT_TIMEOUT,
+                (false, "pass") => 0,
+                _ => EXIT_FAILED,
+            });
         }
         std::thread::sleep(Duration::from_millis(1000));
     }

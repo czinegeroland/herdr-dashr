@@ -150,7 +150,7 @@ pub const ACTIONS: &[(&str, &str, &str)] = &[
 pub const PANES: &[(&str, &str)] = &[("traces", "dashr"), ("doctor", "dashr doctor")];
 
 /// The one-line description: manifest, npm package and repository.
-pub const DESCRIPTION: &str = "End-to-end testing by traces: your AI agent instruments a feature with OpenTelemetry, you review the planned spans, and every service's spans — local, AWS X-Ray, Azure, Google Cloud, Jaeger, Zipkin — meet in one live sequence diagram the agent checks against the expected flow.";
+pub const DESCRIPTION: &str = "End-to-end testing by traces: your AI agent instruments a feature with OpenTelemetry, you browse and edit the code behind every span, and every service's spans — local, AWS X-Ray, Azure, Google Cloud, Jaeger, Zipkin — meet in one live sequence diagram the agent checks against the expected flow.";
 
 fn manifest(version: &'static str) -> Manifest {
     Manifest {

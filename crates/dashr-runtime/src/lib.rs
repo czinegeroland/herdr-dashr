@@ -2,6 +2,7 @@
 //! the poller that reads Jaeger, and the pull sources.
 
 pub mod api;
+pub mod code;
 pub mod command;
 pub mod docker;
 pub mod http;
@@ -96,7 +97,9 @@ pub fn start(
         .map_err(|e| format!("cannot open the session port: {e}"))?;
     let api_port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let agent_token = random_hex(16);
-    let viewer_token = random_hex(16);
+    // Short, so the pane's link fits on one line of a narrow pane and the
+    // terminal makes all of it clickable; it guards a loopback port only.
+    let viewer_token = random_hex(6);
     let record = SessionRecord {
         session_id: session_id.to_owned(),
         pane_id,

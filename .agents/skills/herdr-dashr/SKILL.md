@@ -2,8 +2,8 @@
 name: herdr-dashr
 description: >-
   End-to-end test a feature by its traces. Instrument the code with
-  OpenTelemetry spans, have the human review the planned spans, collect
-  every service's spans into one live sequence diagram — local services,
+  OpenTelemetry spans, list them with their code locations so the human
+  can browse and edit that code in the viewer, collect every service's spans into one live sequence diagram — local services,
   AWS X-Ray (Lambda, Step Functions, ECS), Azure Application Insights,
   Google Cloud Trace, Jaeger, Zipkin — and check the run against the flow
   the feature should produce. Use when the human wants to test, verify or
@@ -21,9 +21,10 @@ the code. You make the feature explain itself through traces:
 
 1. **Instrument** the feature with OpenTelemetry spans at its business
    steps, carrying the data that proves each step did the right thing.
-2. **Write the flow**: the trace the feature should produce, step by step.
-3. **The human reviews** the flow in the browser — the right spans, in the
-   right places, with the right data — and approves or asks for changes.
+2. **List the spans** you added and where each is made (`dashr spans set`):
+   the human sees every span in the viewer's Spans tab, opens the code
+   that makes it, and may edit it there.
+3. **Write the flow**: the trace the feature should produce, step by step.
 4. **Connect the traces** of every service involved: local services export
    to the session's Jaeger; remote ones are pulled from where they report
    (X-Ray, Application Insights, Cloud Trace, ...).
@@ -93,27 +94,49 @@ Read `reference/instrumenting.md`. In short:
 - Give the test run an id the spans carry (`test.run`), so its trace can be
   picked out in a shared environment.
 
-Show the human the instrumentation diff only if they ask; the flow review
-is how they check it.
+Show the human the instrumentation diff only if they ask; the Spans tab
+is where they look at it.
 
-## 4. Write the flow, get it reviewed
+## 4. List the spans, write the flow
 
-Write the flow as JSON (`reference/flows.md`): every step with its
-service, span name, expected attributes and values, and `code` (where the
-span is created) and `why` (what it proves) — the human reviews those.
+Run both from the repository's root: it becomes the root the viewer's
+editor opens files under.
+
+**The span catalog** — every span you added by hand, and the automatic
+ones worth pointing at, with the file and the function (or line) that
+makes it:
+
+```json
+{"spans": [
+  {"service": "orders-api", "span": "reserve stock", "kind": "internal",
+   "file": "src/Orders/StockService.cs", "function": "ReserveAsync",
+   "why": "one reservation per order line", "attributes": ["order.id", "stock.requested"]}
+]}
+```
+
+```bash
+dashr spans set spans.json     # replaces the catalog; prints how many have a location
+dashr spans                    # every span: planned and seen, counts, last attributes (masked)
+```
+
+`file` is relative to the repository (`root` in the JSON overrides it);
+`line` is optional when `function` is given. Spans carrying OpenTelemetry's
+`code.*` attributes are located without a catalog entry. Keep the catalog
+up to date when you add, move or rename spans.
+
+**The flow** — the trace the feature should produce (`reference/flows.md`):
+every step with its service, span name, expected attributes and values,
+and `code` (`src/Orders/StockService.cs:ReserveAsync`) and `why`.
 
 ```bash
 dashr flow set flow.json
 ```
 
-Ask the human to review it in the viewer's Flow tab, then wait:
-
-```bash
-dashr flow wait checkout --review      # exit 0 approved, 3 changes requested
-```
-
-On changes requested, read the comment, change the code and/or the flow,
-`dashr flow set` again (a changed flow needs review again), and wait again.
+Nothing waits for an approval: go on to connect the traces and run. The
+human may edit code in the viewer while you work; `dashr status` lists
+those edits under `human_edits` (file, lines changed, when). When one
+appears, re-read that file before you change it, and rebuild or restart
+what runs it.
 
 ## 5. Connect every service's traces
 
@@ -171,5 +194,6 @@ dashr ingest export.json --format zipkin      # one-off import
 - Measure what the feature does; don't flood services with traffic.
 - Ask before logging in, changing cloud configuration, enabling tracing,
   deploying, or restarting services.
-- Keep instrumentation the human approved; remove spans they rejected.
+- Respect the human's edits made in the viewer (`human_edits`): never
+  overwrite them; ask when one conflicts with what you meant to do.
 - Never read span data around dashr's masking.
