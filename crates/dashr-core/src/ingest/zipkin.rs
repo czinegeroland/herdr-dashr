@@ -20,8 +20,13 @@ fn one(span: &Value, source: &str) -> Option<Span> {
         .and_then(Value::as_object)
         .map(|tags| tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
-    if let Some(remote) = span.pointer("/remoteEndpoint/serviceName").and_then(Value::as_str) {
-        attributes.entry("peer.service".into()).or_insert_with(|| Value::String(remote.to_owned()));
+    if let Some(remote) = span
+        .pointer("/remoteEndpoint/serviceName")
+        .and_then(Value::as_str)
+    {
+        attributes
+            .entry("peer.service".into())
+            .or_insert_with(|| Value::String(remote.to_owned()));
     }
     let error = attributes.get("error").map(|value| match value {
         Value::String(text) => text.clone(),
@@ -51,10 +56,18 @@ fn one(span: &Value, source: &str) -> Option<Span> {
         parent_id: text(span.get("parentId")).map(|p| span_id(&p)),
         name: text(span.get("name")).unwrap_or_default(),
         service,
-        kind: span.get("kind").and_then(Value::as_str).and_then(SpanKind::parse).unwrap_or_default(),
+        kind: span
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(SpanKind::parse)
+            .unwrap_or_default(),
         start_ns,
         end_ns: start_ns + duration_ns,
-        status: if error.is_some() { Status::Error } else { Status::Unset },
+        status: if error.is_some() {
+            Status::Error
+        } else {
+            Status::Unset
+        },
         status_message: error.filter(|e| !e.is_empty() && e != "true"),
         attributes,
         resource,
@@ -101,6 +114,9 @@ mod tests {
         assert_eq!(span.parent_id.as_deref(), Some("463ac35c9f6413ad"));
         assert_eq!((span.kind, span.duration_ns()), (SpanKind::Client, 250_000));
         assert_eq!(span.peer().as_deref(), Some("stock"));
-        assert_eq!((span.status, span.status_message.as_deref()), (Status::Error, Some("timeout")));
+        assert_eq!(
+            (span.status, span.status_message.as_deref()),
+            (Status::Error, Some("timeout"))
+        );
     }
 }

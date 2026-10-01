@@ -54,6 +54,9 @@ impl RunSpec {
             &self.memory,
             "--log-driver",
             "none",
+            // Jaeger traces its own query API; every poll would add a trace.
+            "-e",
+            "OTEL_TRACES_SAMPLER=always_off",
         ]
         .map(str::to_owned)
         .to_vec();
@@ -84,23 +87,32 @@ pub struct Docker {
 
 /// `docker port` output (`127.0.0.1:4318`, `[::]:4318`) as a port.
 pub fn parse_port(output: &str) -> Option<u16> {
-    output.lines().find_map(|line| line.trim().rsplit(':').next()?.parse().ok())
+    output
+        .lines()
+        .find_map(|line| line.trim().rsplit(':').next()?.parse().ok())
 }
 
 impl Docker {
     pub fn new(command: &str) -> Self {
-        Self { command: command.to_owned() }
+        Self {
+            command: command.to_owned(),
+        }
     }
 
     fn run(&self, args: &[String], timeout: Duration) -> Result<String, String> {
-        let argv: Vec<String> = std::iter::once(self.command.clone()).chain(args.iter().cloned()).collect();
+        let argv: Vec<String> = std::iter::once(self.command.clone())
+            .chain(args.iter().cloned())
+            .collect();
         command::run(&argv, &[], timeout)
             .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
             .map_err(|error| {
                 // A spawn failure reads "docker: <reason>"; a failed run
                 // reads "docker exited with ...".
                 if error.starts_with(&format!("{}: ", self.command)) {
-                    format!("`{}` was not found; install Docker (https://docs.docker.com/get-docker/)", self.command)
+                    format!(
+                        "`{}` was not found; install Docker (https://docs.docker.com/get-docker/)",
+                        self.command
+                    )
                 } else {
                     error
                 }
@@ -109,16 +121,31 @@ impl Docker {
 
     /// Whether the daemon answers.
     pub fn available(&self) -> Result<(), String> {
-        self.run(&["version".into(), "--format".into(), "{{.Server.Version}}".into()], Duration::from_secs(15))
-            .map(|_| ())
+        self.run(
+            &[
+                "version".into(),
+                "--format".into(),
+                "{{.Server.Version}}".into(),
+            ],
+            Duration::from_secs(15),
+        )
+        .map(|_| ())
     }
 
     pub fn has_image(&self, image: &str) -> bool {
-        self.run(&["image".into(), "inspect".into(), image.into()], Duration::from_secs(15)).is_ok()
+        self.run(
+            &["image".into(), "inspect".into(), image.into()],
+            Duration::from_secs(15),
+        )
+        .is_ok()
     }
 
     pub fn pull(&self, image: &str) -> Result<(), String> {
-        self.run(&["pull".into(), "-q".into(), image.into()], Duration::from_secs(600)).map(|_| ())
+        self.run(
+            &["pull".into(), "-q".into(), image.into()],
+            Duration::from_secs(600),
+        )
+        .map(|_| ())
     }
 
     /// Starts the container; when the standard ports are taken, starts it
@@ -126,23 +153,38 @@ impl Docker {
     pub fn start(&self, spec: &RunSpec) -> Result<Ports, String> {
         let first = self.run(&spec.args(), Duration::from_secs(120));
         if let Err(error) = &first {
-            let taken = error.contains("already allocated") || error.contains("address already in use");
+            let taken =
+                error.contains("already allocated") || error.contains("address already in use");
             if !(spec.standard_ports && taken) {
                 return Err(error.clone());
             }
             let _ = self.stop(&spec.name);
-            let fallback = RunSpec { standard_ports: false, ..spec.clone() };
+            let fallback = RunSpec {
+                standard_ports: false,
+                ..spec.clone()
+            };
             self.run(&fallback.args(), Duration::from_secs(120))?;
         }
         let port = |container: u16| -> Result<u16, String> {
-            let out = self.run(&["port".into(), spec.name.clone(), format!("{container}/tcp")], Duration::from_secs(15))?;
+            let out = self.run(
+                &["port".into(), spec.name.clone(), format!("{container}/tcp")],
+                Duration::from_secs(15),
+            )?;
             parse_port(&out).ok_or_else(|| format!("no host port for {container}"))
         };
-        Ok(Ports { otlp_grpc: port(OTLP_GRPC)?, otlp_http: port(OTLP_HTTP)?, ui: port(UI)? })
+        Ok(Ports {
+            otlp_grpc: port(OTLP_GRPC)?,
+            otlp_http: port(OTLP_HTTP)?,
+            ui: port(UI)?,
+        })
     }
 
     pub fn stop(&self, name: &str) -> Result<(), String> {
-        self.run(&["rm".into(), "-f".into(), name.into()], Duration::from_secs(60)).map(|_| ())
+        self.run(
+            &["rm".into(), "-f".into(), name.into()],
+            Duration::from_secs(60),
+        )
+        .map(|_| ())
     }
 
     /// dashr's containers as `(name, session)`.
@@ -186,10 +228,21 @@ mod tests {
     #[test]
     fn the_container_is_locked_down_and_on_loopback() {
         let args = spec(true).args().join(" ");
-        for flag in ["--rm", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--log-driver none", "--label herdr.dashr=1", "--label herdr.dashr.session=s1"] {
+        for flag in [
+            "--rm",
+            "--read-only",
+            "--cap-drop ALL",
+            "--security-opt no-new-privileges",
+            "--log-driver none",
+            "-e OTEL_TRACES_SAMPLER=always_off",
+            "--label herdr.dashr=1",
+            "--label herdr.dashr.session=s1",
+        ] {
             assert!(args.contains(flag), "{flag} missing: {args}");
         }
-        assert!(args.contains("-p 127.0.0.1:4318:4318") && args.contains("-p 127.0.0.1:16686:16686"));
+        assert!(
+            args.contains("-p 127.0.0.1:4318:4318") && args.contains("-p 127.0.0.1:16686:16686")
+        );
         assert!(spec(false).args().join(" ").contains("-p 127.0.0.1::4317"));
         assert!(args.ends_with("jaegertracing/jaeger:2.11.0"));
     }

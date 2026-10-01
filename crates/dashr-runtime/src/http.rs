@@ -31,7 +31,11 @@ pub struct Response {
 
 impl Response {
     pub fn json(status: u16, value: &serde_json::Value) -> Self {
-        Self { status, content_type: "application/json", body: value.to_string().into_bytes() }
+        Self {
+            status,
+            content_type: "application/json",
+            body: value.to_string().into_bytes(),
+        }
     }
 
     pub fn error(status: u16, message: &str) -> Self {
@@ -39,7 +43,11 @@ impl Response {
     }
 
     pub fn text(status: u16, content_type: &'static str, body: impl Into<Vec<u8>>) -> Self {
-        Self { status, content_type, body: body.into() }
+        Self {
+            status,
+            content_type,
+            body: body.into(),
+        }
     }
 }
 
@@ -66,7 +74,10 @@ pub fn decode_component(text: &str) -> String {
         match bytes[i] {
             b'+' => out.push(b' '),
             b'%' if i + 2 < bytes.len() => {
-                match std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                match std::str::from_utf8(&bytes[i + 1..i + 3])
+                    .ok()
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                {
                     Some(byte) => {
                         out.push(byte);
                         i += 2;
@@ -98,7 +109,9 @@ fn read_request(stream: &TcpStream) -> Result<Request, (u16, String)> {
     let bad = |m: &str| (400, m.to_owned());
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| bad(&e.to_string()))?;
+    reader
+        .read_line(&mut line)
+        .map_err(|e| bad(&e.to_string()))?;
     let mut parts = line.split_whitespace();
     let method = parts.next().ok_or_else(|| bad("empty request"))?.to_owned();
     let target = parts.next().ok_or_else(|| bad("no target"))?;
@@ -106,7 +119,11 @@ fn read_request(stream: &TcpStream) -> Result<Request, (u16, String)> {
     let mut headers = BTreeMap::new();
     loop {
         let mut header = String::new();
-        if reader.read_line(&mut header).map_err(|e| bad(&e.to_string()))? == 0 {
+        if reader
+            .read_line(&mut header)
+            .map_err(|e| bad(&e.to_string()))?
+            == 0
+        {
             break;
         }
         let header = header.trim_end();
@@ -118,11 +135,17 @@ fn read_request(stream: &TcpStream) -> Result<Request, (u16, String)> {
         }
     }
     let mut body = Vec::new();
-    if headers.get("transfer-encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked")) {
+    if headers
+        .get("transfer-encoding")
+        .is_some_and(|v| v.eq_ignore_ascii_case("chunked"))
+    {
         loop {
             let mut size = String::new();
-            reader.read_line(&mut size).map_err(|e| bad(&e.to_string()))?;
-            let size = usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16).map_err(|_| bad("bad chunk"))?;
+            reader
+                .read_line(&mut size)
+                .map_err(|e| bad(&e.to_string()))?;
+            let size = usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16)
+                .map_err(|_| bad("bad chunk"))?;
             if size == 0 {
                 let mut trailer = String::new();
                 let _ = reader.read_line(&mut trailer);
@@ -132,7 +155,9 @@ fn read_request(stream: &TcpStream) -> Result<Request, (u16, String)> {
                 return Err((413, "body too large".into()));
             }
             let mut chunk = vec![0u8; size + 2];
-            reader.read_exact(&mut chunk).map_err(|e| bad(&e.to_string()))?;
+            reader
+                .read_exact(&mut chunk)
+                .map_err(|e| bad(&e.to_string()))?;
             chunk.truncate(size);
             body.extend_from_slice(&chunk);
         }
@@ -142,9 +167,14 @@ fn read_request(stream: &TcpStream) -> Result<Request, (u16, String)> {
             return Err((413, "body too large".into()));
         }
         body = vec![0u8; length];
-        reader.read_exact(&mut body).map_err(|e| bad(&e.to_string()))?;
+        reader
+            .read_exact(&mut body)
+            .map_err(|e| bad(&e.to_string()))?;
     }
-    if headers.get("content-encoding").is_some_and(|v| v.eq_ignore_ascii_case("gzip")) {
+    if headers
+        .get("content-encoding")
+        .is_some_and(|v| v.eq_ignore_ascii_case("gzip"))
+    {
         let mut decoded = Vec::new();
         flate2::read::GzDecoder::new(&body[..])
             .take(MAX_BODY as u64)
@@ -152,7 +182,13 @@ fn read_request(stream: &TcpStream) -> Result<Request, (u16, String)> {
             .map_err(|e| bad(&format!("bad gzip body: {e}")))?;
         body = decoded;
     }
-    Ok(Request { method, path, query, headers, body })
+    Ok(Request {
+        method,
+        path,
+        query,
+        headers,
+        body,
+    })
 }
 
 fn write_response(mut stream: &TcpStream, response: &Response) {
@@ -225,7 +261,10 @@ mod tests {
     #[test]
     fn requests_with_query_length_and_chunks() {
         let (request, answer) = roundtrip(b"POST /api/x?a=1&b=two%20words HTTP/1.1\r\nContent-Length: 5\r\nX-Token: t\r\n\r\nhello");
-        assert_eq!((request.method.as_str(), request.path.as_str()), ("POST", "/api/x"));
+        assert_eq!(
+            (request.method.as_str(), request.path.as_str()),
+            ("POST", "/api/x")
+        );
         assert_eq!(request.query["b"], "two words");
         assert_eq!(request.headers["x-token"], "t");
         assert_eq!(request.body, b"hello");
@@ -239,7 +278,11 @@ mod tests {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(b"{\"a\":1}").unwrap();
         let body = encoder.finish().unwrap();
-        let mut raw = format!("POST /g HTTP/1.1\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        let mut raw = format!(
+            "POST /g HTTP/1.1\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
         raw.extend_from_slice(&body);
         let (request, _) = roundtrip(&raw);
         assert_eq!(request.body, b"{\"a\":1}");

@@ -139,11 +139,16 @@ impl Span {
         if let Some(peer) = self.text("peer.service") {
             return Some(peer);
         }
-        if let Some(system) = self.text("db.system").or_else(|| self.text("db.system.name")) {
-            return Some(match self.text("db.namespace").or_else(|| self.text("db.name")) {
-                Some(name) => format!("{system}:{name}"),
-                None => system,
-            });
+        if let Some(system) = self
+            .text("db.system")
+            .or_else(|| self.text("db.system.name"))
+        {
+            return Some(
+                match self.text("db.namespace").or_else(|| self.text("db.name")) {
+                    Some(name) => format!("{system}:{name}"),
+                    None => system,
+                },
+            );
         }
         if let Some(destination) = self
             .text("messaging.destination.name")
@@ -283,7 +288,10 @@ mod tests {
             trace_id("1-5759e988-bd862e3fe1be46a994272793"),
             "5759e988bd862e3fe1be46a994272793"
         );
-        assert_eq!(trace_id("463AC35C9F6413AD"), "0000000000000000463ac35c9f6413ad");
+        assert_eq!(
+            trace_id("463AC35C9F6413AD"),
+            "0000000000000000463ac35c9f6413ad"
+        );
         assert_eq!(span_id("53995c3f42cd8ad8"), "53995c3f42cd8ad8");
         let hashed = span_id("|abc.123.");
         assert_eq!(hashed.len(), 16);
@@ -293,15 +301,23 @@ mod tests {
 
     #[test]
     fn base64_ids_decode() {
-        assert_eq!(hex(&base64_decode("W47/KD8ruQhQ0hs8SZ1Oag==").unwrap()), "5b8eff283f2bb90850d21b3c499d4e6a");
+        assert_eq!(
+            hex(&base64_decode("W47/KD8ruQhQ0hs8SZ1Oag==").unwrap()),
+            "5b8eff283f2bb90850d21b3c499d4e6a"
+        );
         assert!(base64_decode("not base64!").is_none());
     }
 
     #[test]
     fn peers_follow_the_semantic_conventions() {
-        assert_eq!(span(json!({"peer.service": "stock"})).peer().as_deref(), Some("stock"));
         assert_eq!(
-            span(json!({"db.system": "postgresql", "db.name": "shop"})).peer().as_deref(),
+            span(json!({"peer.service": "stock"})).peer().as_deref(),
+            Some("stock")
+        );
+        assert_eq!(
+            span(json!({"db.system": "postgresql", "db.name": "shop"}))
+                .peer()
+                .as_deref(),
             Some("postgresql:shop")
         );
         assert_eq!(
@@ -311,7 +327,9 @@ mod tests {
             Some("orders")
         );
         assert_eq!(
-            span(json!({"url.full": "https://user@pay.example.com:443/charge?x=1"})).peer().as_deref(),
+            span(json!({"url.full": "https://user@pay.example.com:443/charge?x=1"}))
+                .peer()
+                .as_deref(),
             Some("pay.example.com:443")
         );
         assert_eq!(span(json!({})).peer(), None);

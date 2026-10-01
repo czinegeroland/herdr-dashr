@@ -22,7 +22,11 @@ pub const VIEWER_HTML: &str = include_str!("../assets/viewer.html");
 
 /// Constant-time comparison, so a token cannot be guessed byte by byte.
 fn same(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
 }
 
 /// `10m`, `2h`, `30s`, `1d` as milliseconds.
@@ -30,34 +34,62 @@ pub fn duration_ms(text: &str) -> Option<u64> {
     let text = text.trim();
     let (number, unit) = text.split_at(text.find(|c: char| !c.is_ascii_digit())?);
     let number: u64 = number.parse().ok()?;
-    Some(number * match unit {
-        "s" => 1_000,
-        "m" => 60_000,
-        "h" => 3_600_000,
-        "d" => 86_400_000,
-        _ => return None,
-    })
+    Some(
+        number
+            * match unit {
+                "s" => 1_000,
+                "m" => 60_000,
+                "h" => 3_600_000,
+                "d" => 86_400_000,
+                _ => return None,
+            },
+    )
 }
 
 fn body_json(request: &Request) -> Result<Value, Response> {
-    serde_json::from_slice(&request.body).map_err(|e| Response::error(400, &format!("body is not JSON: {e}")))
+    serde_json::from_slice(&request.body)
+        .map_err(|e| Response::error(400, &format!("body is not JSON: {e}")))
 }
 
 fn filter(request: &Request) -> Result<Filter, Response> {
-    let mut filter = Filter { limit: Some(20), ..Filter::default() };
+    let mut filter = Filter {
+        limit: Some(20),
+        ..Filter::default()
+    };
     if let Some(since) = request.query.get("since") {
-        let ms = duration_ms(since).ok_or_else(|| Response::error(400, "since: like 10m, 2h or 1d"))?;
+        let ms =
+            duration_ms(since).ok_or_else(|| Response::error(400, "since: like 10m, 2h or 1d"))?;
         filter.since_ns = Some(now_ms().saturating_sub(ms) * 1_000_000);
     }
-    filter.service = request.query.get("service").cloned().filter(|s| !s.is_empty());
+    filter.service = request
+        .query
+        .get("service")
+        .cloned()
+        .filter(|s| !s.is_empty());
     filter.name = request.query.get("name").cloned().filter(|s| !s.is_empty());
-    filter.errors_only = request.query.get("errors").is_some_and(|v| v == "1" || v == "true");
+    filter.errors_only = request
+        .query
+        .get("errors")
+        .is_some_and(|v| v == "1" || v == "true");
     if let Some(limit) = request.query.get("limit") {
-        filter.limit = Some(limit.parse().map_err(|_| Response::error(400, "limit: a number"))?);
+        filter.limit = Some(
+            limit
+                .parse()
+                .map_err(|_| Response::error(400, "limit: a number"))?,
+        );
     }
-    for pair in request.query.get("attr").into_iter().flat_map(|a| a.split(',')) {
-        let (key, value) = pair.split_once('=').ok_or_else(|| Response::error(400, "attr: key=value[,key=value]"))?;
-        filter.attributes.push((key.to_owned(), Value::String(value.to_owned())));
+    for pair in request
+        .query
+        .get("attr")
+        .into_iter()
+        .flat_map(|a| a.split(','))
+    {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| Response::error(400, "attr: key=value[,key=value]"))?;
+        filter
+            .attributes
+            .push((key.to_owned(), Value::String(value.to_owned())));
     }
     Ok(filter)
 }
@@ -68,7 +100,10 @@ fn agent(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
         ("GET", ["traces"]) => match filter(request) {
             Ok(filter) => {
                 let summaries = shared.lock().store.summaries(&filter);
-                Response::json(200, &Value::Array(summaries.iter().map(|s| shared.mask_summary(s)).collect()))
+                Response::json(
+                    200,
+                    &Value::Array(summaries.iter().map(|s| shared.mask_summary(s)).collect()),
+                )
             }
             Err(response) => response,
         },
@@ -77,14 +112,21 @@ fn agent(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
             None => Response::error(404, &format!("no trace {id}")),
         },
         ("GET", ["flows"]) => {
-            let flows: Vec<Value> = shared.flow_names().iter().filter_map(|n| shared.flow_view(n, true)).collect();
+            let flows: Vec<Value> = shared
+                .flow_names()
+                .iter()
+                .filter_map(|n| shared.flow_view(n, true))
+                .collect();
             Response::json(200, &Value::Array(flows))
         }
         ("PUT", ["flows", name]) => {
             let text = String::from_utf8_lossy(&request.body);
             match Flow::parse(&text) {
                 Ok(flow) if flow.name == *name => Response::json(200, &shared.set_flow(flow)),
-                Ok(flow) => Response::error(400, &format!("the flow is named {:?}, not {name:?}", flow.name)),
+                Ok(flow) => Response::error(
+                    400,
+                    &format!("the flow is named {:?}, not {name:?}", flow.name),
+                ),
                 Err(error) => Response::error(422, &error),
             }
         }
@@ -126,13 +168,24 @@ fn agent(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
             }
         }
         ("POST", ["ingest"]) => {
-            let format = match request.query.get("format").map(|f| Format::parse(f)).transpose() {
+            let format = match request
+                .query
+                .get("format")
+                .map(|f| Format::parse(f))
+                .transpose()
+            {
                 Ok(format) => format.unwrap_or_default(),
                 Err(error) => return Response::error(400, &error),
             };
-            let source = request.query.get("source").cloned().unwrap_or_else(|| "import".into());
+            let source = request
+                .query
+                .get("source")
+                .cloned()
+                .unwrap_or_else(|| "import".into());
             match shared.ingest(&request.body, format, &source) {
-                Ok(report) => Response::json(200, &serde_json::to_value(report).unwrap_or_default()),
+                Ok(report) => {
+                    Response::json(200, &serde_json::to_value(report).unwrap_or_default())
+                }
                 Err(error) => Response::error(422, &error),
             }
         }
@@ -152,8 +205,14 @@ fn viewer(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
                 Ok(body) => body,
                 Err(response) => return response,
             };
-            let decision = body.get("decision").and_then(Value::as_str).unwrap_or_default();
-            let comment = body.get("comment").and_then(Value::as_str).map(str::to_owned);
+            let decision = body
+                .get("decision")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let comment = body
+                .get("comment")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             match shared.review(name, decision, comment) {
                 Ok(()) => Response::json(200, &json!({"reviewed": name})),
                 Err(error) => Response::error(400, &error),
@@ -177,18 +236,30 @@ pub fn handler(shared: Arc<Shared>, agent_token: String, viewer_token: String) -
         if path == "/api/ping" {
             return Response::json(200, &json!({"session": shared.info.session_id}));
         }
-        let parts: Vec<String> = path.trim_matches('/').split('/').map(crate::http::decode_component).collect();
+        let parts: Vec<String> = path
+            .trim_matches('/')
+            .split('/')
+            .map(crate::http::decode_component)
+            .collect();
         let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
         match parts.split_first() {
             Some((&"api", rest)) => {
-                let presented = request.headers.get("authorization").and_then(|h| h.strip_prefix("Bearer ")).unwrap_or("");
+                let presented = request
+                    .headers
+                    .get("authorization")
+                    .and_then(|h| h.strip_prefix("Bearer "))
+                    .unwrap_or("");
                 if !same(presented, &agent_token) {
                     return Response::error(401, "missing or wrong session token");
                 }
                 agent(&shared, &request, rest)
             }
             Some((&"v", rest)) => {
-                let presented = request.headers.get("x-dashr-viewer").map(String::as_str).unwrap_or("");
+                let presented = request
+                    .headers
+                    .get("x-dashr-viewer")
+                    .map(String::as_str)
+                    .unwrap_or("");
                 if !same(presented, &viewer_token) {
                     return Response::error(401, "open the link from the dashr pane");
                 }

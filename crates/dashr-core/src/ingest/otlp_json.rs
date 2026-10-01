@@ -44,7 +44,10 @@ pub(crate) fn any_value(value: &Value) -> Value {
     let Some(object) = value.as_object() else {
         return value.clone();
     };
-    if let Some(text) = object.get("stringValue").or_else(|| object.get("string_value")) {
+    if let Some(text) = object
+        .get("stringValue")
+        .or_else(|| object.get("string_value"))
+    {
         return text.clone();
     }
     if let Some(flag) = object.get("boolValue").or_else(|| object.get("bool_value")) {
@@ -52,20 +55,44 @@ pub(crate) fn any_value(value: &Value) -> Value {
     }
     if let Some(number) = object.get("intValue").or_else(|| object.get("int_value")) {
         return match number {
-            Value::String(text) => text.parse::<i64>().map(Value::from).unwrap_or_else(|_| number.clone()),
+            Value::String(text) => text
+                .parse::<i64>()
+                .map(Value::from)
+                .unwrap_or_else(|_| number.clone()),
             other => other.clone(),
         };
     }
-    if let Some(number) = object.get("doubleValue").or_else(|| object.get("double_value")) {
+    if let Some(number) = object
+        .get("doubleValue")
+        .or_else(|| object.get("double_value"))
+    {
         return number.clone();
     }
-    if let Some(array) = object.get("arrayValue").or_else(|| object.get("array_value")) {
-        return Value::Array(list(array, "values", "values").iter().map(any_value).collect());
+    if let Some(array) = object
+        .get("arrayValue")
+        .or_else(|| object.get("array_value"))
+    {
+        return Value::Array(
+            list(array, "values", "values")
+                .iter()
+                .map(any_value)
+                .collect(),
+        );
     }
-    if let Some(kvlist) = object.get("kvlistValue").or_else(|| object.get("kvlist_value")) {
-        return Value::Object(attributes(list(kvlist, "values", "values")).into_iter().collect::<Map<_, _>>());
+    if let Some(kvlist) = object
+        .get("kvlistValue")
+        .or_else(|| object.get("kvlist_value"))
+    {
+        return Value::Object(
+            attributes(list(kvlist, "values", "values"))
+                .into_iter()
+                .collect::<Map<_, _>>(),
+        );
     }
-    if let Some(bytes) = object.get("bytesValue").or_else(|| object.get("bytes_value")) {
+    if let Some(bytes) = object
+        .get("bytesValue")
+        .or_else(|| object.get("bytes_value"))
+    {
         return bytes.clone();
     }
     Value::Null
@@ -100,11 +127,13 @@ fn status(value: Option<&Value>) -> (Status, Option<String>) {
             Some(2) => Status::Error,
             _ => Status::Unset,
         },
-        Some(Value::String(text)) => match text.to_ascii_uppercase().trim_start_matches("STATUS_CODE_") {
-            "OK" => Status::Ok,
-            "ERROR" => Status::Error,
-            _ => Status::Unset,
-        },
+        Some(Value::String(text)) => {
+            match text.to_ascii_uppercase().trim_start_matches("STATUS_CODE_") {
+                "OK" => Status::Ok,
+                "ERROR" => Status::Error,
+                _ => Status::Unset,
+            }
+        }
         _ => Status::Unset,
     };
     let message = value
@@ -128,7 +157,13 @@ pub fn parse(document: &Value, source: &str) -> Result<Vec<Span>, String> {
             .unwrap_or("unknown_service")
             .to_owned();
         let scopes = field(resource_spans, "scopeSpans", "scope_spans")
-            .or_else(|| field(resource_spans, "instrumentationLibrarySpans", "instrumentation_library_spans"))
+            .or_else(|| {
+                field(
+                    resource_spans,
+                    "instrumentationLibrarySpans",
+                    "instrumentation_library_spans",
+                )
+            })
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
@@ -144,8 +179,14 @@ pub fn parse(document: &Value, source: &str) -> Result<Vec<Span>, String> {
                 let events = list(span, "events", "events")
                     .iter()
                     .map(|event| SpanEvent {
-                        name: event.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                        time_ns: field(event, "timeUnixNano", "time_unix_nano").and_then(number_u64).unwrap_or(0),
+                        name: event
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        time_ns: field(event, "timeUnixNano", "time_unix_nano")
+                            .and_then(number_u64)
+                            .unwrap_or(0),
                         attributes: attributes(list(event, "attributes", "attributes")),
                     })
                     .collect();
@@ -165,7 +206,11 @@ pub fn parse(document: &Value, source: &str) -> Result<Vec<Span>, String> {
                     trace_id: trace,
                     span_id: own,
                     parent_id: id(field(span, "parentSpanId", "parent_span_id"), 16),
-                    name: span.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    name: span
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
                     service: service.clone(),
                     kind: kind(span.get("kind")),
                     start_ns,
@@ -190,16 +235,24 @@ fn to_any(value: &Value) -> Value {
     match value {
         Value::String(text) => serde_json::json!({"stringValue": text}),
         Value::Bool(flag) => serde_json::json!({"boolValue": flag}),
-        Value::Number(number) if number.is_i64() || number.is_u64() => serde_json::json!({"intValue": number.to_string()}),
+        Value::Number(number) if number.is_i64() || number.is_u64() => {
+            serde_json::json!({"intValue": number.to_string()})
+        }
         Value::Number(number) => serde_json::json!({"doubleValue": number}),
-        Value::Array(items) => serde_json::json!({"arrayValue": {"values": items.iter().map(to_any).collect::<Vec<_>>()}}),
-        Value::Object(map) => serde_json::json!({"kvlistValue": {"values": key_values(map.iter())}}),
+        Value::Array(items) => {
+            serde_json::json!({"arrayValue": {"values": items.iter().map(to_any).collect::<Vec<_>>()}})
+        }
+        Value::Object(map) => {
+            serde_json::json!({"kvlistValue": {"values": key_values(map.iter())}})
+        }
         Value::Null => serde_json::json!({}),
     }
 }
 
 fn key_values<'a>(items: impl Iterator<Item = (&'a String, &'a Value)>) -> Vec<Value> {
-    items.map(|(key, value)| serde_json::json!({"key": key, "value": to_any(value)})).collect()
+    items
+        .map(|(key, value)| serde_json::json!({"key": key, "value": to_any(value)}))
+        .collect()
 }
 
 /// Spans as an OTLP/JSON export request, grouped by service, so a pulled
@@ -315,7 +368,9 @@ mod tests {
         }]}), "xray").unwrap();
         let again = parse(&encode(&original), "xray").unwrap();
         let mut expected = original.clone();
-        expected[0].resource.insert("dashr.source".into(), json!("xray"));
+        expected[0]
+            .resource
+            .insert("dashr.source".into(), json!("xray"));
         assert_eq!(again, expected);
     }
 }

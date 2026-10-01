@@ -27,10 +27,24 @@ impl Jaeger {
     }
 
     fn get(&self, path: &str) -> Result<String, String> {
-        let mut response = self.agent.get(format!("{}{path}", self.ui)).call().map_err(|e| e.to_string())?;
+        let mut response = self
+            .agent
+            .get(format!("{}{path}", self.ui))
+            .call()
+            .map_err(|e| e.to_string())?;
         let status = response.status().as_u16();
-        let body = response.body_mut().read_to_string().map_err(|e| e.to_string())?;
-        if status == 200 { Ok(body) } else { Err(format!("Jaeger answered {status}: {}", body.chars().take(200).collect::<String>())) }
+        let body = response
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| e.to_string())?;
+        if status == 200 {
+            Ok(body)
+        } else {
+            Err(format!(
+                "Jaeger answered {status}: {}",
+                body.chars().take(200).collect::<String>()
+            ))
+        }
     }
 
     /// Whether the query API answers.
@@ -39,16 +53,28 @@ impl Jaeger {
     }
 
     pub fn services(&self) -> Result<Vec<String>, String> {
-        let body: serde_json::Value = serde_json::from_str(&self.get("/api/services")?).map_err(|e| e.to_string())?;
+        let body: serde_json::Value =
+            serde_json::from_str(&self.get("/api/services")?).map_err(|e| e.to_string())?;
         Ok(body
             .get("data")
             .and_then(serde_json::Value::as_array)
-            .map(|items| items.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|s| s.as_str().map(str::to_owned))
+                    .collect()
+            })
             .unwrap_or_default())
     }
 
     /// The traces a service took part in between `start_us` and `end_us`.
-    pub fn traces(&self, service: &str, start_us: u64, end_us: u64, limit: usize) -> Result<Vec<Span>, String> {
+    pub fn traces(
+        &self,
+        service: &str,
+        start_us: u64,
+        end_us: u64,
+        limit: usize,
+    ) -> Result<Vec<Span>, String> {
         let path = format!(
             "/api/traces?service={}&start={start_us}&end={end_us}&limit={limit}",
             encode(service)
@@ -74,7 +100,10 @@ impl Jaeger {
             Ok(())
         } else {
             let text = response.body_mut().read_to_string().unwrap_or_default();
-            Err(format!("Jaeger refused the spans ({status}): {}", text.chars().take(200).collect::<String>()))
+            Err(format!(
+                "Jaeger refused the spans ({status}): {}",
+                text.chars().take(200).collect::<String>()
+            ))
         }
     }
 }
@@ -84,7 +113,9 @@ pub fn encode(value: &str) -> String {
     value
         .bytes()
         .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
             other => format!("%{other:02X}"),
         })
         .collect()

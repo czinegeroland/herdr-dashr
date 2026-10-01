@@ -42,7 +42,11 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, len: usize) -> Result<&'a [u8], String> {
-        let end = self.at.checked_add(len).filter(|end| *end <= self.bytes.len()).ok_or("truncated field")?;
+        let end = self
+            .at
+            .checked_add(len)
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or("truncated field")?;
         let slice = &self.bytes[self.at..end];
         self.at = end;
         Ok(slice)
@@ -56,7 +60,9 @@ impl<'a> Reader<'a> {
         let key = self.varint()?;
         let value = match key & 7 {
             0 => Wire::Varint(self.varint()?),
-            1 => Wire::Fixed64(u64::from_le_bytes(self.take(8)?.try_into().map_err(|_| "bad fixed64")?)),
+            1 => Wire::Fixed64(u64::from_le_bytes(
+                self.take(8)?.try_into().map_err(|_| "bad fixed64")?,
+            )),
             2 => {
                 let len = usize::try_from(self.varint()?).map_err(|_| "length too large")?;
                 Wire::Bytes(self.take(len)?)
@@ -83,7 +89,9 @@ fn any_value(bytes: &[u8]) -> Result<Value, String> {
             (1, Wire::Bytes(b)) => Value::String(utf8(b)),
             (2, Wire::Varint(v)) => Value::Bool(v != 0),
             (3, Wire::Varint(v)) => Value::from(v as i64),
-            (4, Wire::Fixed64(v)) => serde_json::Number::from_f64(f64::from_bits(v)).map_or(Value::Null, Value::Number),
+            (4, Wire::Fixed64(v)) => {
+                serde_json::Number::from_f64(f64::from_bits(v)).map_or(Value::Null, Value::Number)
+            }
             (5, Wire::Bytes(b)) => {
                 let mut values = Vec::new();
                 let mut array = Reader::new(b);
@@ -141,7 +149,12 @@ fn id(bytes: &[u8]) -> Option<String> {
     (!bytes.is_empty() && bytes.iter().any(|b| *b != 0)).then(|| hex(bytes))
 }
 
-fn span(bytes: &[u8], service: &str, resource: &BTreeMap<String, Value>, source: &str) -> Result<Option<Span>, String> {
+fn span(
+    bytes: &[u8],
+    service: &str,
+    resource: &BTreeMap<String, Value>,
+    source: &str,
+) -> Result<Option<Span>, String> {
     let mut reader = Reader::new(bytes);
     let mut out = Span {
         trace_id: String::new(),
@@ -174,7 +187,11 @@ fn span(bytes: &[u8], service: &str, resource: &BTreeMap<String, Value>, source:
                 out.attributes.insert(key, value);
             }
             (11, Wire::Bytes(b)) => {
-                let mut event = SpanEvent { name: String::new(), time_ns: 0, attributes: BTreeMap::new() };
+                let mut event = SpanEvent {
+                    name: String::new(),
+                    time_ns: 0,
+                    attributes: BTreeMap::new(),
+                };
                 let mut r = Reader::new(b);
                 while let Some((field, wire)) = r.next()? {
                     match (field, wire) {
@@ -315,7 +332,11 @@ mod tests {
     fn request() -> Vec<u8> {
         let mut span = Vec::new();
         bytes(1, &[0xab; 16], &mut span);
-        bytes(2, &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08], &mut span);
+        bytes(
+            2,
+            &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+            &mut span,
+        );
         bytes(4, &[], &mut span);
         bytes(5, b"reserve stock", &mut span);
         uint(6, 3, &mut span);

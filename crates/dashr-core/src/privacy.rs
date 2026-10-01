@@ -88,11 +88,47 @@ const SECRET_TOKENS: &[&str] = &[
 /// scanned for personal values but never replaced by name: `service.name`
 /// and `db.name` are not a person's name.
 const SEMCONV_NAMESPACES: &[&str] = &[
-    "service", "telemetry", "otel", "http", "url", "server", "client", "network", "net", "db",
-    "rpc", "messaging", "faas", "cloud", "aws", "gcp", "azure", "az", "k8s", "container",
-    "host", "os", "process", "deployment", "code", "exception", "error", "thread", "span",
-    "peer", "event", "graphql", "feature_flag", "browser", "device", "user_agent", "xray",
-    "appinsights", "dashr", "test", "flow",
+    "service",
+    "telemetry",
+    "otel",
+    "http",
+    "url",
+    "server",
+    "client",
+    "network",
+    "net",
+    "db",
+    "rpc",
+    "messaging",
+    "faas",
+    "cloud",
+    "aws",
+    "gcp",
+    "azure",
+    "az",
+    "k8s",
+    "container",
+    "host",
+    "os",
+    "process",
+    "deployment",
+    "code",
+    "exception",
+    "error",
+    "thread",
+    "span",
+    "peer",
+    "event",
+    "graphql",
+    "feature_flag",
+    "browser",
+    "device",
+    "user_agent",
+    "xray",
+    "appinsights",
+    "dashr",
+    "test",
+    "flow",
 ];
 
 /// Masking settings (`[masking]` in dashr's configuration file).
@@ -127,10 +163,20 @@ impl Default for MaskingConfig {
 pub fn sanitize(value: &str) -> String {
     let out: String = value
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     let out = out.trim_matches('_').to_owned();
-    if out.is_empty() { "value".to_owned() } else { out }
+    if out.is_empty() {
+        "value".to_owned()
+    } else {
+        out
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -377,13 +423,18 @@ pub struct Masker {
 
 impl Masker {
     pub fn new(config: &MaskingConfig) -> Self {
-        let mut deny_tokens: Vec<String> = PERSONAL_TOKENS.iter().map(|t| (*t).to_owned()).collect();
+        let mut deny_tokens: Vec<String> =
+            PERSONAL_TOKENS.iter().map(|t| (*t).to_owned()).collect();
         deny_tokens.extend(config.deny_tokens.iter().map(|t| t.to_ascii_lowercase()));
         Self {
             enabled: config.enabled,
             detectors: detectors(&config.extra_patterns),
             deny_tokens,
-            allow: config.allow_keys.iter().map(|k| k.to_ascii_lowercase()).collect(),
+            allow: config
+                .allow_keys
+                .iter()
+                .map(|k| k.to_ascii_lowercase())
+                .collect(),
             max_string_len: config.max_string_len,
         }
     }
@@ -401,7 +452,11 @@ impl Masker {
         if self.allow.contains(&key.to_ascii_lowercase()) {
             return Treatment::Allowed;
         }
-        let namespace = key.split('.').next().unwrap_or_default().to_ascii_lowercase();
+        let namespace = key
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         if key.contains('.') && SEMCONV_NAMESPACES.contains(&namespace.as_str()) {
             return Treatment::Scanned;
         }
@@ -524,9 +579,18 @@ mod tests {
     fn semantic_conventions_are_not_names() {
         let masker = Masker::default();
         let mut p = Pseudonyms::default();
-        assert_eq!(masker.value("service.name", &json!("orders"), &mut p), json!("orders"));
-        assert_eq!(masker.value("db.name", &json!("shop"), &mut p), json!("shop"));
-        assert_eq!(masker.value("http.route", &json!("/orders/{id}"), &mut p), json!("/orders/{id}"));
+        assert_eq!(
+            masker.value("service.name", &json!("orders"), &mut p),
+            json!("orders")
+        );
+        assert_eq!(
+            masker.value("db.name", &json!("shop"), &mut p),
+            json!("shop")
+        );
+        assert_eq!(
+            masker.value("http.route", &json!("/orders/{id}"), &mut p),
+            json!("/orders/{id}")
+        );
         assert_eq!(masker.value("order.items", &json!(3), &mut p), json!(3));
     }
 
@@ -534,23 +598,46 @@ mod tests {
     fn personal_and_secret_attributes_become_pseudonyms() {
         let masker = Masker::default();
         let mut p = Pseudonyms::default();
-        assert_eq!(masker.value("customer.email", &json!("ann@example.com"), &mut p), json!("<customer_email#1>"));
-        assert_eq!(masker.value("customer.email", &json!("ann@example.com"), &mut p), json!("<customer_email#1>"));
-        assert_eq!(masker.value("auth.token", &json!("abc"), &mut p), json!("<auth_token#1>"));
         assert_eq!(
-            masker.value("url.full", &json!("https://x/api?email=bob@example.com"), &mut p),
+            masker.value("customer.email", &json!("ann@example.com"), &mut p),
+            json!("<customer_email#1>")
+        );
+        assert_eq!(
+            masker.value("customer.email", &json!("ann@example.com"), &mut p),
+            json!("<customer_email#1>")
+        );
+        assert_eq!(
+            masker.value("auth.token", &json!("abc"), &mut p),
+            json!("<auth_token#1>")
+        );
+        assert_eq!(
+            masker.value(
+                "url.full",
+                &json!("https://x/api?email=bob@example.com"),
+                &mut p
+            ),
             json!("https://x/api?email=<email#1>")
         );
         assert_eq!(
-            masker.value("note", &json!("card 4111 1111 1111 1111 from 10.1.2.3"), &mut p),
+            masker.value(
+                "note",
+                &json!("card 4111 1111 1111 1111 from 10.1.2.3"),
+                &mut p
+            ),
             json!("card <card#1> from <ipv4#1>")
         );
     }
 
     #[test]
     fn masking_can_be_switched_off_for_synthetic_data() {
-        let masker = Masker::new(&MaskingConfig { enabled: false, ..MaskingConfig::default() });
+        let masker = Masker::new(&MaskingConfig {
+            enabled: false,
+            ..MaskingConfig::default()
+        });
         let mut p = Pseudonyms::default();
-        assert_eq!(masker.value("customer.email", &json!("ann@example.com"), &mut p), json!("ann@example.com"));
+        assert_eq!(
+            masker.value("customer.email", &json!("ann@example.com"), &mut p),
+            json!("ann@example.com")
+        );
     }
 }

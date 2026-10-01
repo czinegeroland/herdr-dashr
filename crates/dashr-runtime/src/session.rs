@@ -34,7 +34,11 @@ impl SessionRecord {
     }
 
     fn host(&self) -> &str {
-        if self.bind == "0.0.0.0" || self.bind == "::" { "127.0.0.1" } else { &self.bind }
+        if self.bind == "0.0.0.0" || self.bind == "::" {
+            "127.0.0.1"
+        } else {
+            &self.bind
+        }
     }
 
     pub fn otlp_http(&self) -> String {
@@ -56,13 +60,21 @@ pub struct Registry {
 
 impl Registry {
     pub fn new(state_dir: &Path) -> Self {
-        Self { dir: state_dir.join("sessions") }
+        Self {
+            dir: state_dir.join("sessions"),
+        }
     }
 
     fn path(&self, session_id: &str) -> PathBuf {
         let safe: String = session_id
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .collect();
         self.dir.join(format!("{safe}.json"))
     }
@@ -71,7 +83,10 @@ impl Registry {
         std::fs::create_dir_all(&self.dir)?;
         let path = self.path(&record.session_id);
         let temporary = path.with_extension("json.tmp");
-        std::fs::write(&temporary, serde_json::to_vec_pretty(record).unwrap_or_default())?;
+        std::fs::write(
+            &temporary,
+            serde_json::to_vec_pretty(record).unwrap_or_default(),
+        )?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -99,18 +114,24 @@ impl Registry {
 
     /// The session `selector` names (its id or its pane id); without one,
     /// the only session `alive` accepts, else the newest.
-    pub fn find(&self, selector: Option<&str>, alive: impl Fn(&SessionRecord) -> bool) -> Result<SessionRecord, String> {
+    pub fn find(
+        &self,
+        selector: Option<&str>,
+        alive: impl Fn(&SessionRecord) -> bool,
+    ) -> Result<SessionRecord, String> {
         let records = self.list();
         if let Some(selector) = selector.filter(|s| !s.is_empty()) {
             return records
                 .into_iter()
                 .find(|r| r.session_id == selector || r.pane_id.as_deref() == Some(selector))
-                .ok_or_else(|| format!("no dashr session {selector:?}; `dashr sessions` lists them"));
+                .ok_or_else(|| {
+                    format!("no dashr session {selector:?}; `dashr sessions` lists them")
+                });
         }
         let live: Vec<SessionRecord> = records.into_iter().filter(|r| alive(r)).collect();
-        live.into_iter()
-            .next()
-            .ok_or_else(|| "no dashr session is running: open the trace pane first (see `dashr --help`)".to_owned())
+        live.into_iter().next().ok_or_else(|| {
+            "no dashr session is running: open the trace pane first (see `dashr --help`)".to_owned()
+        })
     }
 }
 
@@ -160,7 +181,11 @@ mod tests {
             api_port: 1234,
             agent_token: "t".into(),
             container: format!("dashr-{id}"),
-            ports: Ports { otlp_grpc: 4317, otlp_http: 4318, ui: 16686 },
+            ports: Ports {
+                otlp_grpc: 4317,
+                otlp_http: 4318,
+                ui: 16686,
+            },
             bind: "127.0.0.1".into(),
             started_ms: started,
         }
@@ -172,14 +197,35 @@ mod tests {
         let registry = Registry::new(dir.path());
         registry.save(&record("a", Some("w1:p2"), 1)).unwrap();
         registry.save(&record("b", None, 2)).unwrap();
-        assert_eq!(registry.find(Some("w1:p2"), |_| true).unwrap().session_id, "a");
-        assert_eq!(registry.find(None, |_| true).unwrap().session_id, "b", "newest first");
-        assert_eq!(registry.find(None, |r| r.session_id == "a").unwrap().session_id, "a");
-        assert!(registry.find(None, |_| false).unwrap_err().contains("no dashr session"));
+        assert_eq!(
+            registry.find(Some("w1:p2"), |_| true).unwrap().session_id,
+            "a"
+        );
+        assert_eq!(
+            registry.find(None, |_| true).unwrap().session_id,
+            "b",
+            "newest first"
+        );
+        assert_eq!(
+            registry
+                .find(None, |r| r.session_id == "a")
+                .unwrap()
+                .session_id,
+            "a"
+        );
+        assert!(
+            registry
+                .find(None, |_| false)
+                .unwrap_err()
+                .contains("no dashr session")
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(dir.path().join("sessions/a.json")).unwrap().permissions().mode();
+            let mode = std::fs::metadata(dir.path().join("sessions/a.json"))
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
         registry.remove("a");

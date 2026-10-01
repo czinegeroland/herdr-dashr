@@ -57,12 +57,8 @@ impl Format {
     ];
 
     pub fn parse(text: &str) -> Result<Self, String> {
-        serde_json::from_value(Value::String(text.to_ascii_lowercase())).map_err(|_| {
-            format!(
-                "unknown format {text:?}; one of {}",
-                Self::NAMES.join(", ")
-            )
-        })
+        serde_json::from_value(Value::String(text.to_ascii_lowercase()))
+            .map_err(|_| format!("unknown format {text:?}; one of {}", Self::NAMES.join(", ")))
     }
 }
 
@@ -117,7 +113,9 @@ pub fn detect(document: &Value) -> Option<Format> {
     if document.get("Segments").is_some() {
         return Some(Format::Xray);
     }
-    if document.get("data").and_then(Value::as_array).is_some() || (has("spans") && has("processes")) {
+    if document.get("data").and_then(Value::as_array).is_some()
+        || (has("spans") && has("processes"))
+    {
         return Some(Format::Jaeger);
     }
     if has("tables") {
@@ -132,7 +130,10 @@ pub fn detect(document: &Value) -> Option<Format> {
     };
     if let Some(items) = first.as_array() {
         // Zipkin's /api/v2/traces: a list of traces, each a list of spans.
-        return items.first().and_then(|span| span.get("traceId")).map(|_| Format::Zipkin);
+        return items
+            .first()
+            .and_then(|span| span.get("traceId"))
+            .map(|_| Format::Zipkin);
     }
     if first.get("traceId").is_some() && first.get("id").is_some() {
         return Some(Format::Zipkin);
@@ -149,8 +150,13 @@ pub fn detect(document: &Value) -> Option<Format> {
 /// A JSON number or numeric string as `u64`.
 pub(crate) fn number_u64(value: &Value) -> Option<u64> {
     match value {
-        Value::Number(number) => number.as_u64().or_else(|| number.as_f64().map(|f| f as u64)),
-        Value::String(text) => text.parse::<u64>().ok().or_else(|| text.parse::<f64>().ok().map(|f| f as u64)),
+        Value::Number(number) => number
+            .as_u64()
+            .or_else(|| number.as_f64().map(|f| f as u64)),
+        Value::String(text) => text
+            .parse::<u64>()
+            .ok()
+            .or_else(|| text.parse::<f64>().ok().map(|f| f as u64)),
         _ => None,
     }
 }
@@ -182,25 +188,28 @@ pub fn rfc3339_ns(text: &str) -> Option<u64> {
         parts.next()?.parse().ok()?,
         parts.next()?.parse().ok()?,
     );
-    let (clock, offset_secs) = if let Some(clock) = rest.strip_suffix('Z').or_else(|| rest.strip_suffix('z')) {
-        (clock, 0i64)
-    } else if let Some(index) = rest.rfind(['+', '-']).filter(|i| *i >= 5) {
-        let (clock, offset) = rest.split_at(index);
-        let sign = if offset.starts_with('-') { -1 } else { 1 };
-        let mut hm = offset[1..].split(':');
-        let hours: i64 = hm.next()?.parse().ok()?;
-        let minutes: i64 = hm.next().unwrap_or("0").parse().ok()?;
-        (clock, sign * (hours * 3600 + minutes * 60))
-    } else {
-        (rest, 0)
-    };
+    let (clock, offset_secs) =
+        if let Some(clock) = rest.strip_suffix('Z').or_else(|| rest.strip_suffix('z')) {
+            (clock, 0i64)
+        } else if let Some(index) = rest.rfind(['+', '-']).filter(|i| *i >= 5) {
+            let (clock, offset) = rest.split_at(index);
+            let sign = if offset.starts_with('-') { -1 } else { 1 };
+            let mut hm = offset[1..].split(':');
+            let hours: i64 = hm.next()?.parse().ok()?;
+            let minutes: i64 = hm.next().unwrap_or("0").parse().ok()?;
+            (clock, sign * (hours * 3600 + minutes * 60))
+        } else {
+            (rest, 0)
+        };
     let mut hms = clock.split(':');
     let hour: i64 = hms.next()?.parse().ok()?;
     let minute: i64 = hms.next()?.parse().ok()?;
     let second_text = hms.next().unwrap_or("0");
     let (whole, fraction) = second_text.split_once('.').unwrap_or((second_text, ""));
     let second: i64 = whole.parse().ok()?;
-    let nanos: i64 = format!("{:0<9}", &fraction[..fraction.len().min(9)]).parse().ok()?;
+    let nanos: i64 = format!("{:0<9}", &fraction[..fraction.len().min(9)])
+        .parse()
+        .ok()?;
     // Days from civil (Howard Hinnant's algorithm).
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
@@ -210,7 +219,9 @@ pub fn rfc3339_ns(text: &str) -> Option<u64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
     let secs = days * 86_400 + hour * 3600 + minute * 60 + second - offset_secs;
-    u64::try_from(secs).ok().map(|s| s * 1_000_000_000 + nanos as u64)
+    u64::try_from(secs)
+        .ok()
+        .map(|s| s * 1_000_000_000 + nanos as u64)
 }
 
 #[cfg(test)]
@@ -221,10 +232,22 @@ mod tests {
     #[test]
     fn formats_are_recognised_by_shape() {
         assert_eq!(detect(&json!({"resourceSpans": []})), Some(Format::Otlp));
-        assert_eq!(detect(&json!({"Traces": [], "UnprocessedTraceIds": []})), Some(Format::Xray));
-        assert_eq!(detect(&json!([{"traceId": "a", "id": "b"}])), Some(Format::Zipkin));
-        assert_eq!(detect(&json!([[{"traceId": "a", "id": "b"}]])), Some(Format::Zipkin));
-        assert_eq!(detect(&json!({"data": [{"traceID": "a"}]})), Some(Format::Jaeger));
+        assert_eq!(
+            detect(&json!({"Traces": [], "UnprocessedTraceIds": []})),
+            Some(Format::Xray)
+        );
+        assert_eq!(
+            detect(&json!([{"traceId": "a", "id": "b"}])),
+            Some(Format::Zipkin)
+        );
+        assert_eq!(
+            detect(&json!([[{"traceId": "a", "id": "b"}]])),
+            Some(Format::Zipkin)
+        );
+        assert_eq!(
+            detect(&json!({"data": [{"traceID": "a"}]})),
+            Some(Format::Jaeger)
+        );
         assert_eq!(detect(&json!({"tables": []})), Some(Format::Appinsights));
         assert_eq!(detect(&json!({"traces": []})), Some(Format::Cloudtrace));
         assert_eq!(detect(&json!({"hello": 1})), None);
@@ -240,8 +263,14 @@ mod tests {
     #[test]
     fn rfc3339_with_offsets_and_fractions() {
         assert_eq!(rfc3339_ns("1970-01-01T00:00:01Z"), Some(1_000_000_000));
-        assert_eq!(rfc3339_ns("2026-09-28T10:00:00.5+02:00"), rfc3339_ns("2026-09-28T08:00:00.500Z"));
-        assert_eq!(rfc3339_ns("2026-09-28T08:00:00.123456789Z").map(|n| n % 1_000_000_000), Some(123_456_789));
+        assert_eq!(
+            rfc3339_ns("2026-09-28T10:00:00.5+02:00"),
+            rfc3339_ns("2026-09-28T08:00:00.500Z")
+        );
+        assert_eq!(
+            rfc3339_ns("2026-09-28T08:00:00.123456789Z").map(|n| n % 1_000_000_000),
+            Some(123_456_789)
+        );
         assert_eq!(rfc3339_ns("garbage"), None);
     }
 

@@ -22,8 +22,15 @@ fn tags(items: Option<&Value>) -> BTreeMap<String, Value> {
 
 fn trace(document: &Value, source: &str, out: &mut Vec<Span>) {
     let processes = document.get("processes").and_then(Value::as_object);
-    for span in document.get("spans").and_then(Value::as_array).into_iter().flatten() {
-        let (Some(raw_trace), Some(raw_span)) = (text(span.get("traceID")), text(span.get("spanID"))) else {
+    for span in document
+        .get("spans")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(raw_trace), Some(raw_span)) =
+            (text(span.get("traceID")), text(span.get("spanID")))
+        else {
             continue;
         };
         let process = text(span.get("processID")).and_then(|id| processes?.get(&id).cloned());
@@ -38,13 +45,21 @@ fn trace(document: &Value, source: &str, out: &mut Vec<Span>) {
             .remove("span.kind")
             .and_then(|k| k.as_str().and_then(SpanKind::parse))
             .unwrap_or_default();
-        let failed = attributes.get("error").is_some_and(|e| e == &Value::Bool(true) || e == "true")
-            || attributes.get("otel.status_code").is_some_and(|c| c == "ERROR");
+        let failed = attributes
+            .get("error")
+            .is_some_and(|e| e == &Value::Bool(true) || e == "true")
+            || attributes
+                .get("otel.status_code")
+                .is_some_and(|c| c == "ERROR");
         let message = text(attributes.get("otel.status_description"));
         let parent = span
             .get("references")
             .and_then(Value::as_array)
-            .and_then(|refs| refs.iter().find(|r| text(r.get("refType")).as_deref() == Some("CHILD_OF")).or(refs.first()))
+            .and_then(|refs| {
+                refs.iter()
+                    .find(|r| text(r.get("refType")).as_deref() == Some("CHILD_OF"))
+                    .or(refs.first())
+            })
             .and_then(|r| text(r.get("spanID")))
             .map(|p| span_id(&p));
         let start_ns = span.get("startTime").and_then(number_u64).unwrap_or(0) * 1_000;
@@ -116,7 +131,10 @@ mod tests {
         )
         .unwrap();
         let span = &spans[0];
-        assert_eq!((span.service.as_str(), span.kind, span.status), ("payments", SpanKind::Server, Status::Error));
+        assert_eq!(
+            (span.service.as_str(), span.kind, span.status),
+            ("payments", SpanKind::Server, Status::Error)
+        );
         assert_eq!(span.parent_id.as_deref(), Some("00000000000000a1"));
         assert_eq!(span.duration_ns(), 5_000);
     }

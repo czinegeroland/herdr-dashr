@@ -41,7 +41,13 @@ pub struct Running {
 pub fn container_name(session_id: &str) -> String {
     let safe: String = session_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     format!("dashr-{safe}")
 }
@@ -56,9 +62,14 @@ pub fn start(
     progress: &dyn Fn(&str),
 ) -> Result<Running, String> {
     let docker = Docker::new(&config.jaeger.docker);
-    docker.available().map_err(|error| format!("Docker is not available: {error}"))?;
+    docker
+        .available()
+        .map_err(|error| format!("Docker is not available: {error}"))?;
     if !docker.has_image(&config.jaeger.image) {
-        progress(&format!("pulling {} (first start only)…", config.jaeger.image));
+        progress(&format!(
+            "pulling {} (first start only)…",
+            config.jaeger.image
+        ));
         docker.pull(&config.jaeger.image)?;
     }
     let name = container_name(session_id);
@@ -81,7 +92,8 @@ pub fn start(
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("cannot open the session port: {e}"))?;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("cannot open the session port: {e}"))?;
     let api_port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let agent_token = random_hex(16);
     let viewer_token = random_hex(16);
@@ -114,7 +126,9 @@ pub fn start(
         std::thread::spawn(move || shared.poll_jaeger());
     }
     let registry = Registry::new(&paths.state_dir);
-    registry.save(&record).map_err(|e| format!("cannot write the session record: {e}"))?;
+    registry
+        .save(&record)
+        .map_err(|e| format!("cannot write the session record: {e}"))?;
     Ok(Running {
         viewer_url: format!("http://127.0.0.1:{api_port}/#{viewer_token}"),
         record,
@@ -145,7 +159,9 @@ pub fn alive(record: &SessionRecord) -> bool {
         .call()
         .ok()
         .and_then(|mut r| r.body_mut().read_json::<serde_json::Value>().ok())
-        .is_some_and(|v| v.get("session").and_then(serde_json::Value::as_str) == Some(record.session_id.as_str()))
+        .is_some_and(|v| {
+            v.get("session").and_then(serde_json::Value::as_str) == Some(record.session_id.as_str())
+        })
 }
 
 /// Removes sessions whose process is gone: their records and containers
@@ -177,6 +193,9 @@ pub fn reap(paths: &Paths, config: &Config) -> Vec<String> {
 mod tests {
     #[test]
     fn container_names_are_docker_safe() {
-        assert_eq!(super::container_name("a1b2c3d4-w1:p2"), "dashr-a1b2c3d4-w1-p2");
+        assert_eq!(
+            super::container_name("a1b2c3d4-w1:p2"),
+            "dashr-a1b2c3d4-w1-p2"
+        );
     }
 }

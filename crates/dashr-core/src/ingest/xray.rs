@@ -99,14 +99,22 @@ fn convert(doc: &Value, parent: Option<String>, segment: bool, cx: &Context, out
     } else {
         SpanKind::Internal
     };
-    let operation = attributes.get("aws.operation").and_then(Value::as_str).map(str::to_owned);
+    let operation = attributes
+        .get("aws.operation")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let span_name = match (&method, &url, &operation) {
-        (Some(method), Some(url), _) if segment || namespace == "remote" => format!("{method} {}", path_of(url)),
+        (Some(method), Some(url), _) if segment || namespace == "remote" => {
+            format!("{method} {}", path_of(url))
+        }
         (_, _, Some(operation)) if outbound => operation.clone(),
         _ => name.clone(),
     };
     let start_ns = seconds_ns(doc.get("start_time")).unwrap_or(0);
-    let in_progress = doc.get("in_progress").and_then(Value::as_bool).unwrap_or(false);
+    let in_progress = doc
+        .get("in_progress")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if in_progress {
         attributes.insert("xray.in_progress".into(), Value::Bool(true));
     }
@@ -162,7 +170,12 @@ fn segment(doc: &Value, source: &str, out: &mut Vec<Span>) {
         resource.insert("aws.xray.origin".to_owned(), Value::String(origin));
     }
     let parent = text(doc.get("parent_id")).map(|p| span_id(&p));
-    let cx = Context { trace: &trace, service: &service, resource: &resource, source };
+    let cx = Context {
+        trace: &trace,
+        service: &service,
+        resource: &resource,
+        source,
+    };
     // An independent subsegment (`"type": "subsegment"`) is still a span of
     // its own service, nested under the segment it names as parent.
     convert(doc, parent, true, &cx, out);
@@ -182,7 +195,8 @@ fn walk(value: &Value, source: &str, out: &mut Vec<Span>) -> Result<(), String> 
                 walk(segments, source, out)?;
             } else if let Some(document) = map.get("Document") {
                 let parsed: Value = match document {
-                    Value::String(text) => serde_json::from_str(text).map_err(|error| format!("bad X-Ray segment document: {error}"))?,
+                    Value::String(text) => serde_json::from_str(text)
+                        .map_err(|error| format!("bad X-Ray segment document: {error}"))?,
                     other => other.clone(),
                 };
                 segment(&parsed, source, out);
@@ -251,24 +265,51 @@ mod tests {
     fn a_step_function_execution_becomes_one_trace() {
         let spans = parse(&step_function(), "xray").unwrap();
         assert_eq!(spans.len(), 5);
-        assert!(spans.iter().all(|s| s.trace_id == "66f7a1b20123456789abcdef01234567"));
+        assert!(
+            spans
+                .iter()
+                .all(|s| s.trace_id == "66f7a1b20123456789abcdef01234567")
+        );
         let by = |id: &str| spans.iter().find(|s| s.span_id == id).unwrap();
         let machine = by("1111111111111111");
-        assert_eq!((machine.service.as_str(), machine.kind, machine.parent_id.as_deref()), ("checkout-machine", SpanKind::Server, None));
+        assert_eq!(
+            (
+                machine.service.as_str(),
+                machine.kind,
+                machine.parent_id.as_deref()
+            ),
+            ("checkout-machine", SpanKind::Server, None)
+        );
         let state = by("2222222222222222");
-        assert_eq!((state.name.as_str(), state.kind, state.parent_id.as_deref()), ("ValidateOrder", SpanKind::Internal, Some("1111111111111111")));
+        assert_eq!(
+            (state.name.as_str(), state.kind, state.parent_id.as_deref()),
+            (
+                "ValidateOrder",
+                SpanKind::Internal,
+                Some("1111111111111111")
+            )
+        );
         let invoke = by("3333333333333333");
-        assert_eq!((invoke.name.as_str(), invoke.kind), ("Invoke", SpanKind::Client));
+        assert_eq!(
+            (invoke.name.as_str(), invoke.kind),
+            ("Invoke", SpanKind::Client)
+        );
         assert_eq!(invoke.peer().as_deref(), Some("Lambda"));
         let function = by("4444444444444444");
         assert_eq!(function.service, "validate");
         assert_eq!(function.parent_id.as_deref(), Some("3333333333333333"));
         assert_eq!(function.attributes["order_id"], json!("o-42"));
         assert_eq!(function.status, Status::Error);
-        assert_eq!(function.status_message.as_deref(), Some("stock service timed out"));
+        assert_eq!(
+            function.status_message.as_deref(),
+            Some("stock service timed out")
+        );
         assert!((function.duration_ms() - 600.0).abs() < 0.01);
         let dynamo = by("5555555555555555");
-        assert_eq!((dynamo.service.as_str(), dynamo.name.as_str()), ("validate", "GetItem"));
+        assert_eq!(
+            (dynamo.service.as_str(), dynamo.name.as_str()),
+            ("validate", "GetItem")
+        );
         assert_eq!(dynamo.attributes["aws.table_name"], json!("orders"));
     }
 

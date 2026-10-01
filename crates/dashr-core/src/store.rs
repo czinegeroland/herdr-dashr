@@ -99,12 +99,18 @@ impl TraceStore {
             if span.trace_id.len() != 32 || span.span_id.len() != 16 {
                 continue;
             }
-            let entry = self.traces.entry(span.trace_id.clone()).or_insert_with(|| Entry {
-                spans: BTreeMap::new(),
-                updated_ms: now_ms,
-            });
+            let entry = self
+                .traces
+                .entry(span.trace_id.clone())
+                .or_insert_with(|| Entry {
+                    spans: BTreeMap::new(),
+                    updated_ms: now_ms,
+                });
             if !replace_other_sources
-                && entry.spans.get(&span.span_id).is_some_and(|held| held.source != span.source)
+                && entry
+                    .spans
+                    .get(&span.span_id)
+                    .is_some_and(|held| held.source != span.source)
             {
                 continue;
             }
@@ -129,7 +135,11 @@ impl TraceStore {
         if self.traces.len() <= MAX_TRACES {
             return;
         }
-        let mut by_age: Vec<(u64, String)> = self.traces.iter().map(|(id, e)| (e.updated_ms, id.clone())).collect();
+        let mut by_age: Vec<(u64, String)> = self
+            .traces
+            .iter()
+            .map(|(id, e)| (e.updated_ms, id.clone()))
+            .collect();
         by_age.sort();
         for (_, id) in by_age.into_iter().take(self.traces.len() - MAX_TRACES) {
             self.traces.remove(&id);
@@ -171,7 +181,11 @@ impl TraceStore {
             .filter(|entry| matches(entry, filter))
             .map(|entry| summarize(entry.spans.values(), entry.updated_ms))
             .collect();
-        out.sort_by(|a, b| b.start_ns.cmp(&a.start_ns).then_with(|| a.trace_id.cmp(&b.trace_id)));
+        out.sort_by(|a, b| {
+            b.start_ns
+                .cmp(&a.start_ns)
+                .then_with(|| a.trace_id.cmp(&b.trace_id))
+        });
         if let Some(limit) = filter.limit {
             out.truncate(limit);
         }
@@ -220,7 +234,12 @@ fn matches(entry: &Entry, filter: &Filter) -> bool {
         return false;
     }
     if !filter.attributes.is_empty()
-        && !spans().any(|s| filter.attributes.iter().all(|(k, v)| value_matches(v, s.attribute(k))))
+        && !spans().any(|s| {
+            filter
+                .attributes
+                .iter()
+                .all(|(k, v)| value_matches(v, s.attribute(k)))
+        })
     {
         return false;
     }
@@ -235,7 +254,10 @@ pub fn summarize<'a>(spans: impl Iterator<Item = &'a Span> + Clone, updated_ms: 
     let mut ordered: Vec<&Span> = spans.collect();
     ordered.sort_by_key(|s| (s.start_ns, s.parent_id.is_some()));
     let is_root = |s: &&Span| s.parent_id.as_deref().is_none_or(|p| !ids.contains(p));
-    let root = ordered.iter().find(|s| s.parent_id.is_none()).or_else(|| ordered.iter().find(|s| is_root(s)));
+    let root = ordered
+        .iter()
+        .find(|s| s.parent_id.is_none())
+        .or_else(|| ordered.iter().find(|s| is_root(s)));
     let mut services = Vec::new();
     let mut sources = BTreeSet::new();
     for span in &ordered {
@@ -247,13 +269,19 @@ pub fn summarize<'a>(spans: impl Iterator<Item = &'a Span> + Clone, updated_ms: 
     let start_ns = ordered.iter().map(|s| s.start_ns).min().unwrap_or(0);
     let end_ns = ordered.iter().map(|s| s.end_ns).max().unwrap_or(0);
     Summary {
-        trace_id: ordered.first().map(|s| s.trace_id.clone()).unwrap_or_default(),
+        trace_id: ordered
+            .first()
+            .map(|s| s.trace_id.clone())
+            .unwrap_or_default(),
         root: root.map(|s| s.name.clone()).unwrap_or_default(),
         root_service: root.map(|s| s.service.clone()).unwrap_or_default(),
         services,
         spans: ordered.len(),
         errors: ordered.iter().filter(|s| s.is_error()).count(),
-        orphans: ordered.iter().filter(|s| s.parent_id.as_deref().is_some_and(|p| !ids.contains(p))).count(),
+        orphans: ordered
+            .iter()
+            .filter(|s| s.parent_id.as_deref().is_some_and(|p| !ids.contains(p)))
+            .count(),
         start_ns,
         end_ns,
         duration_ms: end_ns.saturating_sub(start_ns) as f64 / 1e6,
@@ -268,7 +296,15 @@ pub(crate) mod tests {
     use crate::model::{SpanKind, Status};
     use serde_json::json;
 
-    pub fn span(trace: &str, id: &str, parent: Option<&str>, service: &str, name: &str, start: u64, end: u64) -> Span {
+    pub fn span(
+        trace: &str,
+        id: &str,
+        parent: Option<&str>,
+        service: &str,
+        name: &str,
+        start: u64,
+        end: u64,
+    ) -> Span {
         Span {
             trace_id: format!("{trace:0>32}"),
             span_id: format!("{id:0>16}"),
@@ -291,12 +327,28 @@ pub(crate) mod tests {
     #[test]
     fn spans_group_into_traces_and_later_copies_replace_earlier_ones() {
         let mut store = TraceStore::new();
-        assert_eq!(store.insert(vec![span("a", "1", None, "api", "POST /orders", 10, 20)], 1), 1);
+        assert_eq!(
+            store.insert(vec![span("a", "1", None, "api", "POST /orders", 10, 20)], 1),
+            1
+        );
         let mut later = span("a", "2", Some("1"), "stock", "reserve", 12, 15);
         later.status = Status::Error;
-        assert_eq!(store.insert(vec![later.clone(), span("b", "9", Some("8"), "x", "orphan", 5, 6)], 2), 2);
+        assert_eq!(
+            store.insert(
+                vec![
+                    later.clone(),
+                    span("b", "9", Some("8"), "x", "orphan", 5, 6)
+                ],
+                2
+            ),
+            2
+        );
         let v = store.version();
-        assert_eq!(store.insert(vec![later.clone()], 3), 0, "a duplicate changes nothing");
+        assert_eq!(
+            store.insert(vec![later.clone()], 3),
+            0,
+            "a duplicate changes nothing"
+        );
         assert_eq!(store.version(), v);
         later.end_ns = 18;
         assert_eq!(store.insert(vec![later], 4), 0);
@@ -304,7 +356,10 @@ pub(crate) mod tests {
         let summaries = store.summaries(&Filter::default());
         assert_eq!(summaries.len(), 2);
         let a = summaries.iter().find(|s| s.root == "POST /orders").unwrap();
-        assert_eq!((a.spans, a.errors, a.orphans, a.services.clone()), (2, 1, 0, vec!["api".to_owned(), "stock".to_owned()]));
+        assert_eq!(
+            (a.spans, a.errors, a.orphans, a.services.clone()),
+            (2, 1, 0, vec!["api".to_owned(), "stock".to_owned()])
+        );
         let b = summaries.iter().find(|s| s.root == "orphan").unwrap();
         assert_eq!(b.orphans, 1);
         assert_eq!(store.trace(&a.trace_id).unwrap()[1].end_ns, 18);
@@ -318,7 +373,10 @@ pub(crate) mod tests {
         store.insert(vec![pulled], 1);
         let echo = span("a", "1", None, "sfn", "run", 1, 3);
         store.insert_keep_sources(vec![echo], 2);
-        assert_eq!(store.trace(&format!("{:0>32}", "a")).unwrap()[0].source, "xray");
+        assert_eq!(
+            store.trace(&format!("{:0>32}", "a")).unwrap()[0].source,
+            "xray"
+        );
     }
 
     #[test]
@@ -326,12 +384,51 @@ pub(crate) mod tests {
         let mut store = TraceStore::new();
         let mut tagged = span("a", "1", None, "api", "POST /orders", 10, 20);
         tagged.attributes.insert("test.run".into(), json!("r-1"));
-        store.insert(vec![tagged, span("b", "2", None, "web", "GET /", 30, 40)], 1);
-        let only = |f: Filter| store.summaries(&f).into_iter().map(|s| s.root).collect::<Vec<_>>();
-        assert_eq!(only(Filter { service: Some("ap*".into()), ..Filter::default() }), ["POST /orders"]);
-        assert_eq!(only(Filter { attributes: vec![("test.run".into(), json!("r-1"))], ..Filter::default() }), ["POST /orders"]);
-        assert_eq!(only(Filter { since_ns: Some(25), ..Filter::default() }), ["GET /"]);
-        assert_eq!(only(Filter { limit: Some(1), ..Filter::default() }), ["GET /"]);
-        assert!(only(Filter { errors_only: true, ..Filter::default() }).is_empty());
+        store.insert(
+            vec![tagged, span("b", "2", None, "web", "GET /", 30, 40)],
+            1,
+        );
+        let only = |f: Filter| {
+            store
+                .summaries(&f)
+                .into_iter()
+                .map(|s| s.root)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            only(Filter {
+                service: Some("ap*".into()),
+                ..Filter::default()
+            }),
+            ["POST /orders"]
+        );
+        assert_eq!(
+            only(Filter {
+                attributes: vec![("test.run".into(), json!("r-1"))],
+                ..Filter::default()
+            }),
+            ["POST /orders"]
+        );
+        assert_eq!(
+            only(Filter {
+                since_ns: Some(25),
+                ..Filter::default()
+            }),
+            ["GET /"]
+        );
+        assert_eq!(
+            only(Filter {
+                limit: Some(1),
+                ..Filter::default()
+            }),
+            ["GET /"]
+        );
+        assert!(
+            only(Filter {
+                errors_only: true,
+                ..Filter::default()
+            })
+            .is_empty()
+        );
     }
 }

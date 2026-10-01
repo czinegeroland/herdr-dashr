@@ -76,7 +76,9 @@ impl Config {
     pub fn load_from_dir(dir: &Path) -> Result<Self, String> {
         let path = dir.join(FILE_NAME);
         match std::fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text).map_err(|error| format!("{}: {error}", path.display())),
+            Ok(text) => {
+                toml::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(format!("{}: {error}", path.display())),
         }
@@ -90,10 +92,14 @@ mod tests {
     #[test]
     fn defaults_and_overrides() {
         assert_eq!(Config::default().jaeger.bind, "127.0.0.1");
-        let config: Config = toml::from_str("[jaeger]\nbind = \"0.0.0.0\"\n[masking]\nenabled = false\n").unwrap();
+        let config: Config =
+            toml::from_str("[jaeger]\nbind = \"0.0.0.0\"\n[masking]\nenabled = false\n").unwrap();
         assert_eq!(config.jaeger.bind, "0.0.0.0");
         assert!(!config.masking.enabled);
         assert_eq!(config.jaeger.image, JAEGER_IMAGE);
-        assert!(toml::from_str::<Config>("[grafana]\n").is_err(), "unknown sections are refused");
+        assert!(
+            toml::from_str::<Config>("[grafana]\n").is_err(),
+            "unknown sections are refused"
+        );
     }
 }

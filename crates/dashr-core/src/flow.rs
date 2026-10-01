@@ -187,14 +187,20 @@ pub struct Flow {
 impl Flow {
     /// Parses and checks a flow; fills in step ids.
     pub fn parse(json: &str) -> Result<Self, String> {
-        let mut flow: Flow = serde_json::from_str(json).map_err(|error| format!("invalid flow: {error}"))?;
+        let mut flow: Flow =
+            serde_json::from_str(json).map_err(|error| format!("invalid flow: {error}"))?;
         flow.validate()?;
         Ok(flow)
     }
 
     pub fn validate(&mut self) -> Result<(), String> {
         let name = self.name.trim();
-        if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+        if name.is_empty()
+            || name.len() > 64
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+        {
             return Err("flow name: 1-64 letters, digits, '-', '_' or '.'".into());
         }
         if self.steps.is_empty() {
@@ -209,7 +215,10 @@ impl Flow {
                 return Err(format!("step id {:?} is used twice", step.id));
             }
             if step.service.is_empty() || step.span.is_empty() {
-                return Err(format!("step {}: service and span are required (globs allowed)", step.id));
+                return Err(format!(
+                    "step {}: service and span are required (globs allowed)",
+                    step.id
+                ));
             }
             check_patterns(&step.attributes, &format!("step {}", step.id))?;
             if let Some(count) = &step.count
@@ -231,7 +240,8 @@ fn check_patterns(attributes: &serde_json::Map<String, Value>, at: &str) -> Resu
         if let Value::String(text) = expected
             && let Some(pattern) = text.strip_prefix("re:")
         {
-            Regex::new(pattern).map_err(|error| format!("{at}: attribute {key}: bad regex: {error}"))?;
+            Regex::new(pattern)
+                .map_err(|error| format!("{at}: attribute {key}: bad regex: {error}"))?;
         }
     }
     Ok(())
@@ -317,10 +327,17 @@ pub struct Candidate<'a> {
 }
 
 fn step_matches(step: &Step, span: &Span) -> bool {
-    glob(&step.service, &span.service) && glob(&step.span, &span.name) && step.kind.is_none_or(|k| k == span.kind)
+    glob(&step.service, &span.service)
+        && glob(&step.span, &span.name)
+        && step.kind.is_none_or(|k| k == span.kind)
 }
 
-fn attribute_problems(step: &Step, span: &Span, masker: &Masker, pseudonyms: &mut Pseudonyms) -> Vec<String> {
+fn attribute_problems(
+    step: &Step,
+    span: &Span,
+    masker: &Masker,
+    pseudonyms: &mut Pseudonyms,
+) -> Vec<String> {
     step.attributes
         .iter()
         .filter(|(key, expected)| !value_matches(expected, span.attribute(key)))
@@ -328,7 +345,9 @@ fn attribute_problems(step: &Step, span: &Span, masker: &Masker, pseudonyms: &mu
             let actual = span.attribute(key);
             let shown = actual.map(|value| masker.value(key, value, pseudonyms));
             match (expected.as_str(), shown) {
-                (Some("!"), Some(shown)) => format!("{key}: must not be recorded, but is ({shown})"),
+                (Some("!"), Some(shown)) => {
+                    format!("{key}: must not be recorded, but is ({shown})")
+                }
                 (_, None) => format!("{key}: missing (expected {expected})"),
                 (_, Some(shown)) => format!("{key}: expected {expected}, got {shown}"),
             }
@@ -337,7 +356,9 @@ fn attribute_problems(step: &Step, span: &Span, masker: &Masker, pseudonyms: &mu
 }
 
 fn selected(flow: &Flow, spans: &[Span]) -> bool {
-    let Some(selector) = &flow.selector else { return true };
+    let Some(selector) = &flow.selector else {
+        return true;
+    };
     if !selector.attributes.is_empty()
         && !selector
             .attributes
@@ -368,15 +389,25 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
     let mut steps = Vec::new();
     for step in &flow.steps {
         let candidates: Vec<&Span> = spans.iter().filter(|s| step_matches(step, s)).collect();
-        let free: Vec<&Span> = candidates.iter().copied().filter(|s| !used.contains(s.span_id.as_str())).collect();
+        let free: Vec<&Span> = candidates
+            .iter()
+            .copied()
+            .filter(|s| !used.contains(s.span_id.as_str()))
+            .collect();
         let in_order: Vec<&Span> = match flow.order {
-            Order::Sequence => free.iter().copied().filter(|s| s.start_ns >= previous_start).collect(),
+            Order::Sequence => free
+                .iter()
+                .copied()
+                .filter(|s| s.start_ns >= previous_start)
+                .collect(),
             Order::Any => free.clone(),
         };
         // Prefer a span whose attributes are right; else the first in order.
         let best = |pool: &[&'_ Span]| -> Option<Span> {
             pool.iter()
-                .find(|s| attribute_problems(step, s, masker, &mut Pseudonyms::default()).is_empty())
+                .find(|s| {
+                    attribute_problems(step, s, masker, &mut Pseudonyms::default()).is_empty()
+                })
                 .or_else(|| pool.first())
                 .map(|s| (*s).clone())
         };
@@ -395,14 +426,26 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
             problems: Vec::new(),
         };
         let Some(span) = chosen else {
-            result.status = if step.optional { StepStatus::Skipped } else { StepStatus::Missing };
+            result.status = if step.optional {
+                StepStatus::Skipped
+            } else {
+                StepStatus::Missing
+            };
             if !step.optional {
-                result.problems.push(format!("no span {:?} in service {:?}", step.span, step.service));
+                result.problems.push(format!(
+                    "no span {:?} in service {:?}",
+                    step.span, step.service
+                ));
             }
             steps.push(result);
             continue;
         };
-        used.insert(spans.iter().find(|s| s.span_id == span.span_id).map_or("", |s| s.span_id.as_str()));
+        used.insert(
+            spans
+                .iter()
+                .find(|s| s.span_id == span.span_id)
+                .map_or("", |s| s.span_id.as_str()),
+        );
         result.span_id = Some(span.span_id.clone());
         result.duration_ms = Some(span.duration_ms());
         let mut status = StepStatus::Ok;
@@ -428,8 +471,14 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
         }
         match (step.error, span.is_error()) {
             (false, true) => {
-                let message = span.status_message.as_deref().map(|m| masker.text(m, &mut pseudonyms));
-                problems.push(format!("failed: {}", message.unwrap_or_else(|| "error status".into())));
+                let message = span
+                    .status_message
+                    .as_deref()
+                    .map(|m| masker.text(m, &mut pseudonyms));
+                problems.push(format!(
+                    "failed: {}",
+                    message.unwrap_or_else(|| "error status".into())
+                ));
                 status = StepStatus::Error;
             }
             (true, false) => {
@@ -441,7 +490,10 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
         if let Some(max) = step.max_ms
             && span.duration_ms() > max
         {
-            problems.push(format!("took {:.1} ms; budget {max} ms", span.duration_ms()));
+            problems.push(format!(
+                "took {:.1} ms; budget {max} ms",
+                span.duration_ms()
+            ));
             if status == StepStatus::Ok {
                 status = StepStatus::Slow;
             }
@@ -477,7 +529,10 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
             .iter()
             .filter(|s| s.is_error() && !expected_errors.contains(&s.span_id))
             .map(|s| {
-                let message = s.status_message.as_deref().map_or_else(|| "error status".into(), |m| masker.text(m, &mut pseudonyms));
+                let message = s.status_message.as_deref().map_or_else(
+                    || "error status".into(),
+                    |m| masker.text(m, &mut pseudonyms),
+                );
                 problem(s, message)
             })
             .collect()
@@ -486,7 +541,11 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
     };
     let forbidden: Vec<Problem> = spans
         .iter()
-        .filter(|s| flow.forbid.iter().any(|f| glob(&f.service, &s.service) && glob(&f.span, &s.name)))
+        .filter(|s| {
+            flow.forbid
+                .iter()
+                .any(|f| glob(&f.service, &s.service) && glob(&f.span, &s.name))
+        })
         .map(|s| problem(s, "forbidden span".into()))
         .collect();
     let start = spans.iter().map(|s| s.start_ns).min().unwrap_or(0);
@@ -495,7 +554,10 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
     let over_budget = flow.max_ms.is_some_and(|max| duration_ms > max);
 
     let settled = now_ms.saturating_sub(updated_ms) >= flow.settle_secs * 1000;
-    let ok_steps = steps.iter().filter(|s| matches!(s.status, StepStatus::Ok | StepStatus::Skipped)).count();
+    let ok_steps = steps
+        .iter()
+        .filter(|s| matches!(s.status, StepStatus::Ok | StepStatus::Skipped))
+        .count();
     let complete = ok_steps == steps.len();
     let hard = !unexpected_errors.is_empty()
         || !forbidden.is_empty()
@@ -510,19 +572,32 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
         VerdictStatus::Running
     };
     let mut parts = vec![format!("{ok_steps}/{} steps ok", steps.len())];
-    for step in steps.iter().filter(|s| !matches!(s.status, StepStatus::Ok | StepStatus::Skipped)) {
+    for step in steps
+        .iter()
+        .filter(|s| !matches!(s.status, StepStatus::Ok | StepStatus::Skipped))
+    {
         parts.push(format!("{} {:?}", step.id, step.status).to_lowercase());
     }
     if !unexpected_errors.is_empty() {
-        parts.push(format!("{} unexpected error span(s)", unexpected_errors.len()));
+        parts.push(format!(
+            "{} unexpected error span(s)",
+            unexpected_errors.len()
+        ));
     }
     if !forbidden.is_empty() {
         parts.push(format!("{} forbidden span(s)", forbidden.len()));
     }
     if over_budget {
-        parts.push(format!("trace took {duration_ms:.0} ms, over {} ms", flow.max_ms.unwrap_or(0.0)));
+        parts.push(format!(
+            "trace took {duration_ms:.0} ms, over {} ms",
+            flow.max_ms.unwrap_or(0.0)
+        ));
     }
-    let score = (ok_steps, steps.iter().filter(|s| s.span_id.is_some()).count(), start);
+    let score = (
+        ok_steps,
+        steps.iter().filter(|s| s.span_id.is_some()).count(),
+        start,
+    );
     Scored {
         verdict: Verdict {
             flow: flow.name.clone(),
@@ -542,18 +617,30 @@ fn judge(flow: &Flow, spans: &[Span], updated_ms: u64, now_ms: u64, masker: &Mas
 
 /// The verdict on the best of `candidates` (traces since the flow was
 /// armed): the one meeting the most steps, then the newest.
-pub fn evaluate(flow: &Flow, candidates: &[Candidate<'_>], now_ms: u64, masker: &Masker) -> Verdict {
+pub fn evaluate(
+    flow: &Flow,
+    candidates: &[Candidate<'_>],
+    now_ms: u64,
+    masker: &Masker,
+) -> Verdict {
     let relevant: Vec<&Candidate> = candidates
         .iter()
         .filter(|c| selected(flow, c.spans))
-        .filter(|c| c.spans.iter().any(|s| flow.steps.iter().any(|step| step_matches(step, s))))
+        .filter(|c| {
+            c.spans
+                .iter()
+                .any(|s| flow.steps.iter().any(|step| step_matches(step, s)))
+        })
         .collect();
     let best = relevant
         .iter()
         .map(|c| judge(flow, c.spans, c.updated_ms, now_ms, masker))
         .max_by(|a, b| a.score.cmp(&b.score));
     match best {
-        Some(scored) => Verdict { traces_considered: relevant.len(), ..scored.verdict },
+        Some(scored) => Verdict {
+            traces_considered: relevant.len(),
+            ..scored.verdict
+        },
         None => Verdict {
             flow: flow.name.clone(),
             status: VerdictStatus::Waiting,
@@ -565,7 +652,11 @@ pub fn evaluate(flow: &Flow, candidates: &[Candidate<'_>], now_ms: u64, masker: 
                 .iter()
                 .map(|step| StepResult {
                     id: step.id.clone(),
-                    status: if step.optional { StepStatus::Skipped } else { StepStatus::Missing },
+                    status: if step.optional {
+                        StepStatus::Skipped
+                    } else {
+                        StepStatus::Missing
+                    },
                     service: step.service.clone(),
                     span: step.span.clone(),
                     span_id: None,
@@ -612,14 +703,37 @@ mod tests {
         let mut root = span("a", "1", None, "orders-api", "POST /orders", 0, 100_000_000);
         root.attributes.insert("order.items".into(), json!(items));
         root.attributes.insert("test.run".into(), json!("r-1"));
-        let mut validate = span("a", "2", Some("1"), "orders-api", "validate order", 1_000_000, 2_000_000);
-        validate.attributes.insert("customer.email".into(), json!(email));
-        let reserve = span("a", "3", Some("1"), "stock-api", "reserve", 3_000_000, 30_000_000);
+        let mut validate = span(
+            "a",
+            "2",
+            Some("1"),
+            "orders-api",
+            "validate order",
+            1_000_000,
+            2_000_000,
+        );
+        validate
+            .attributes
+            .insert("customer.email".into(), json!(email));
+        let reserve = span(
+            "a",
+            "3",
+            Some("1"),
+            "stock-api",
+            "reserve",
+            3_000_000,
+            30_000_000,
+        );
         vec![root, validate, reserve]
     }
 
     fn verdict(spans: &[Span], updated_ms: u64, now_ms: u64) -> Verdict {
-        evaluate(&checkout(), &[Candidate { spans, updated_ms }], now_ms, &Masker::default())
+        evaluate(
+            &checkout(),
+            &[Candidate { spans, updated_ms }],
+            now_ms,
+            &Masker::default(),
+        )
     }
 
     #[test]
@@ -655,13 +769,26 @@ mod tests {
     #[test]
     fn wrong_values_are_reported_masked() {
         let v = verdict(&trace(2, "bob@evil.org"), 0, 100);
-        assert_eq!(v.status, VerdictStatus::Running, "may still change until settled");
+        assert_eq!(
+            v.status,
+            VerdictStatus::Running,
+            "may still change until settled"
+        );
         assert_eq!(v.steps[0].status, StepStatus::Mismatch);
         assert_eq!(v.steps[0].problems, ["order.items: expected 3, got 2"]);
-        assert_eq!(v.steps[1].problems, ["customer.email: expected \"re:@example\\\\.com$\", got \"<customer_email#1>\""]);
+        assert_eq!(
+            v.steps[1].problems,
+            ["customer.email: expected \"re:@example\\\\.com$\", got \"<customer_email#1>\""]
+        );
         let text = serde_json::to_string(&v).unwrap();
-        assert!(!text.contains("bob@evil.org"), "the actual value never reaches the agent");
-        assert_eq!(verdict(&trace(2, "bob@evil.org"), 0, 20_000).status, VerdictStatus::Fail);
+        assert!(
+            !text.contains("bob@evil.org"),
+            "the actual value never reaches the agent"
+        );
+        assert_eq!(
+            verdict(&trace(2, "bob@evil.org"), 0, 20_000).status,
+            VerdictStatus::Fail
+        );
     }
 
     #[test]
@@ -676,11 +803,30 @@ mod tests {
         assert_eq!(v.unexpected_errors.len(), 1);
 
         let mut spans = trace(3, "ann@example.com");
-        spans.push(span("a", "4", Some("1"), "stock-api", "reserve", 31_000_000, 40_000_000));
-        spans.push(span("a", "5", Some("1"), "stock-api", "retry reserve", 30_500_000, 30_600_000));
+        spans.push(span(
+            "a",
+            "4",
+            Some("1"),
+            "stock-api",
+            "reserve",
+            31_000_000,
+            40_000_000,
+        ));
+        spans.push(span(
+            "a",
+            "5",
+            Some("1"),
+            "stock-api",
+            "retry reserve",
+            30_500_000,
+            30_600_000,
+        ));
         let v = verdict(&spans, 0, 100);
         assert_eq!(v.steps[2].status, StepStatus::Mismatch);
-        assert_eq!(v.steps[2].problems, ["2 matching spans; expected exactly 1"]);
+        assert_eq!(
+            v.steps[2].problems,
+            ["2 matching spans; expected exactly 1"]
+        );
         assert_eq!(v.forbidden.len(), 1);
         assert_eq!(v.status, VerdictStatus::Fail);
 
@@ -700,19 +846,36 @@ mod tests {
         let mut other = trace(3, "ann@example.com");
         other[0].attributes.insert("test.run".into(), json!("r-2"));
         let v = verdict(&other, 0, 100);
-        assert_eq!(v.status, VerdictStatus::Waiting, "another run's trace is not considered");
+        assert_eq!(
+            v.status,
+            VerdictStatus::Waiting,
+            "another run's trace is not considered"
+        );
     }
 
     #[test]
     fn the_best_trace_wins() {
         let good = trace(3, "ann@example.com");
-        let partial: Vec<Span> = trace(3, "ann@example.com").into_iter().take(1).map(|mut s| {
-            s.trace_id = "b".repeat(32);
-            s
-        }).collect();
+        let partial: Vec<Span> = trace(3, "ann@example.com")
+            .into_iter()
+            .take(1)
+            .map(|mut s| {
+                s.trace_id = "b".repeat(32);
+                s
+            })
+            .collect();
         let v = evaluate(
             &checkout(),
-            &[Candidate { spans: &partial, updated_ms: 0 }, Candidate { spans: &good, updated_ms: 0 }],
+            &[
+                Candidate {
+                    spans: &partial,
+                    updated_ms: 0,
+                },
+                Candidate {
+                    spans: &good,
+                    updated_ms: 0,
+                },
+            ],
             100,
             &Masker::default(),
         );
@@ -722,11 +885,33 @@ mod tests {
 
     #[test]
     fn invalid_flows_are_refused_with_a_reason() {
-        assert!(Flow::parse(r#"{"name":"x","steps":[]}"#).unwrap_err().contains("at least one step"));
-        assert!(Flow::parse(r#"{"name":"bad name","steps":[{"service":"a","span":"b"}]}"#).is_err());
-        assert!(Flow::parse(r#"{"name":"x","steps":[{"service":"a","span":"b","attributes":{"k":"re:("}}]}"#).unwrap_err().contains("bad regex"));
-        assert!(Flow::parse(r#"{"name":"x","steps":[{"service":"a","span":"b","colour":1}]}"#).unwrap_err().contains("unknown field"));
-        let flow = Flow::parse(r#"{"name":"x","steps":[{"service":"a","span":"b"},{"service":"a","span":"c"}]}"#).unwrap();
-        assert_eq!((flow.steps[0].id.as_str(), flow.steps[1].id.as_str()), ("1", "2"));
+        assert!(
+            Flow::parse(r#"{"name":"x","steps":[]}"#)
+                .unwrap_err()
+                .contains("at least one step")
+        );
+        assert!(
+            Flow::parse(r#"{"name":"bad name","steps":[{"service":"a","span":"b"}]}"#).is_err()
+        );
+        assert!(
+            Flow::parse(
+                r#"{"name":"x","steps":[{"service":"a","span":"b","attributes":{"k":"re:("}}]}"#
+            )
+            .unwrap_err()
+            .contains("bad regex")
+        );
+        assert!(
+            Flow::parse(r#"{"name":"x","steps":[{"service":"a","span":"b","colour":1}]}"#)
+                .unwrap_err()
+                .contains("unknown field")
+        );
+        let flow = Flow::parse(
+            r#"{"name":"x","steps":[{"service":"a","span":"b"},{"service":"a","span":"c"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (flow.steps[0].id.as_str(), flow.steps[1].id.as_str()),
+            ("1", "2")
+        );
     }
 }

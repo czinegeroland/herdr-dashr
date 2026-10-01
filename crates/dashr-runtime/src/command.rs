@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 /// `aws`, `az`, `gcloud` and `npm` are `.cmd` files a bare spawn misses.
 pub fn shell_argv(command: &[String]) -> Vec<String> {
     if cfg!(windows) {
-        ["cmd".to_owned(), "/c".to_owned()].into_iter().chain(command.iter().cloned()).collect()
+        ["cmd".to_owned(), "/c".to_owned()]
+            .into_iter()
+            .chain(command.iter().cloned())
+            .collect()
     } else {
         command.to_vec()
     }
@@ -68,7 +71,10 @@ pub fn run(argv: &[String], env: &[(String, String)], timeout: Duration) -> Resu
     if status.success() {
         Ok(Output { stdout, stderr })
     } else {
-        Err(format!("{program} exited with {status}: {}", last_line(&stderr)))
+        Err(format!(
+            "{program} exited with {status}: {}",
+            last_line(&stderr)
+        ))
     }
 }
 
@@ -91,14 +97,26 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn runs_with_environment_and_reports_failures() {
-        let argv: Vec<String> = ["sh", "-c", "printf %s \"$X\"; echo oops >&2"].map(String::from).to_vec();
+        let argv: Vec<String> = ["sh", "-c", "printf %s \"$X\"; echo oops >&2"]
+            .map(String::from)
+            .to_vec();
         let out = run(&argv, &[("X".into(), "hi".into())], Duration::from_secs(5)).unwrap();
         assert_eq!(out.stdout, b"hi");
         assert_eq!(out.stderr.trim(), "oops");
-        let failing: Vec<String> = ["sh", "-c", "echo first >&2; echo why >&2; exit 3"].map(String::from).to_vec();
-        assert!(run(&failing, &[], Duration::from_secs(5)).unwrap_err().ends_with("why"));
+        let failing: Vec<String> = ["sh", "-c", "echo first >&2; echo why >&2; exit 3"]
+            .map(String::from)
+            .to_vec();
+        assert!(
+            run(&failing, &[], Duration::from_secs(5))
+                .unwrap_err()
+                .ends_with("why")
+        );
         let slow: Vec<String> = ["sleep", "5"].map(String::from).to_vec();
-        assert!(run(&slow, &[], Duration::from_millis(200)).unwrap_err().contains("longer"));
+        assert!(
+            run(&slow, &[], Duration::from_millis(200))
+                .unwrap_err()
+                .contains("longer")
+        );
         assert!(run(&["no-such-program-xyz".into()], &[], Duration::from_secs(1)).is_err());
     }
 }

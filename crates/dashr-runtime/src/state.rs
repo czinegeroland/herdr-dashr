@@ -159,7 +159,9 @@ impl Shared {
     }
 
     pub fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn stopped(&self) -> bool {
@@ -179,7 +181,11 @@ impl Shared {
                 flow.name.clone(),
                 FlowEntry {
                     flow: flow.clone(),
-                    review: Review { state: ReviewState::Pending, comment: None, at_ms: None },
+                    review: Review {
+                        state: ReviewState::Pending,
+                        comment: None,
+                        at_ms: None,
+                    },
                     armed_ms: now,
                     announced: None,
                 },
@@ -190,17 +196,27 @@ impl Shared {
         json!({"flow": flow.name, "changed": !unchanged, "review": self.flow_view(&flow.name, true).and_then(|v| v.get("review").cloned())})
     }
 
-    pub fn review(&self, name: &str, decision: &str, comment: Option<String>) -> Result<(), String> {
+    pub fn review(
+        &self,
+        name: &str,
+        decision: &str,
+        comment: Option<String>,
+    ) -> Result<(), String> {
         let state_value = match decision {
             "approve" | "approved" => ReviewState::Approved,
             "changes" | "request_changes" | "changes_requested" => ReviewState::ChangesRequested,
             other => return Err(format!("unknown decision {other:?}; approve or changes")),
         };
         let mut state = self.lock();
-        let entry = state.flows.get_mut(name).ok_or_else(|| format!("no flow {name:?}"))?;
+        let entry = state
+            .flows
+            .get_mut(name)
+            .ok_or_else(|| format!("no flow {name:?}"))?;
         entry.review = Review {
             state: state_value,
-            comment: comment.map(|c| c.trim().to_owned()).filter(|c| !c.is_empty()),
+            comment: comment
+                .map(|c| c.trim().to_owned())
+                .filter(|c| !c.is_empty()),
             at_ms: Some(now_ms()),
         };
         state.touch();
@@ -210,7 +226,10 @@ impl Shared {
     /// Counts only traces from now on.
     pub fn arm(&self, name: &str) -> Result<(), String> {
         let mut state = self.lock();
-        let entry = state.flows.get_mut(name).ok_or_else(|| format!("no flow {name:?}"))?;
+        let entry = state
+            .flows
+            .get_mut(name)
+            .ok_or_else(|| format!("no flow {name:?}"))?;
         entry.armed_ms = now_ms();
         entry.announced = None;
         state.touch();
@@ -230,9 +249,17 @@ impl Shared {
             .store
             .all()
             .into_iter()
-            .filter(|(spans, updated)| *updated >= entry.armed_ms && spans.first().is_some_and(|s| s.start_ns >= since_ns))
+            .filter(|(spans, updated)| {
+                *updated >= entry.armed_ms && spans.first().is_some_and(|s| s.start_ns >= since_ns)
+            })
             .collect();
-        let candidates: Vec<Candidate> = traces.iter().map(|(spans, updated_ms)| Candidate { spans, updated_ms: *updated_ms }).collect();
+        let candidates: Vec<Candidate> = traces
+            .iter()
+            .map(|(spans, updated_ms)| Candidate {
+                spans,
+                updated_ms: *updated_ms,
+            })
+            .collect();
         flow::evaluate(&entry.flow, &candidates, now, &self.masker)
     }
 
@@ -271,7 +298,8 @@ impl Shared {
                 let entry = &state.flows[&name];
                 self.verdict_locked(&state, entry, now)
             };
-            let decided = matches!(verdict.status, VerdictStatus::Pass | VerdictStatus::Fail) && (verdict.settled || verdict.status == VerdictStatus::Fail);
+            let decided = matches!(verdict.status, VerdictStatus::Pass | VerdictStatus::Fail)
+                && (verdict.settled || verdict.status == VerdictStatus::Fail);
             if !decided {
                 continue;
             }
@@ -293,7 +321,10 @@ impl Shared {
             ("DASHR_SINCE".to_owned(), (since_ms / 1000).to_string()),
             ("DASHR_SINCE_MS".to_owned(), since_ms.to_string()),
             ("DASHR_SINCE_ISO".to_owned(), iso(since_ms)),
-            ("DASHR_UNTIL".to_owned(), until_ms.div_ceil(1000).to_string()),
+            (
+                "DASHR_UNTIL".to_owned(),
+                until_ms.div_ceil(1000).to_string(),
+            ),
             ("DASHR_UNTIL_MS".to_owned(), until_ms.to_string()),
             ("DASHR_UNTIL_ISO".to_owned(), iso(until_ms)),
             ("DASHR_OTLP_HTTP".to_owned(), self.info.otlp_http.clone()),
@@ -316,10 +347,20 @@ impl Shared {
                 services.push(span.service.clone());
             }
         }
-        let warning = self.jaeger.send(&spans).err().map(|e| format!("kept, but not sent to Jaeger: {e}"));
+        let warning = self
+            .jaeger
+            .send(&spans)
+            .err()
+            .map(|e| format!("kept, but not sent to Jaeger: {e}"));
         let count = spans.len();
         self.lock().store.insert(spans, now_ms());
-        RunReport { spans: count, traces: traces.len(), services, error: None, warning }
+        RunReport {
+            spans: count,
+            traces: traces.len(),
+            services,
+            error: None,
+            warning,
+        }
     }
 
     /// One-shot import of a file or a command's output.
@@ -331,7 +372,11 @@ impl Shared {
     /// Tries a source once, then keeps running it every `every_secs`.
     pub fn add_source(self: &Arc<Self>, mut spec: SourceSpec) -> Result<RunReport, String> {
         let name = spec.name.trim().to_owned();
-        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+        {
             return Err("source name: letters, digits, '-', '_' or '.'".into());
         }
         if spec.command.is_empty() {
@@ -340,7 +385,9 @@ impl Shared {
         spec.name = name.clone();
         spec.every_secs = spec.every_secs.max(MIN_SOURCE_EVERY_SECS);
         let now = now_ms();
-        let lookback = spec.lookback_minutes.unwrap_or(self.config.sources.first_lookback_minutes);
+        let lookback = spec
+            .lookback_minutes
+            .unwrap_or(self.config.sources.first_lookback_minutes);
         let since = now.saturating_sub(lookback * 60_000);
         let trial = self.fetch(&spec, since, now);
         let (report, ok) = match trial {
@@ -352,12 +399,21 @@ impl Shared {
                 (report, true)
             }
             Err(error) => (
-                RunReport { spans: 0, traces: 0, services: Vec::new(), error: Some(error.clone()), warning: None },
+                RunReport {
+                    spans: 0,
+                    traces: 0,
+                    services: Vec::new(),
+                    error: Some(error.clone()),
+                    warning: None,
+                },
                 false,
             ),
         };
         if !ok && !spec.keep_on_error {
-            return Err(format!("the source's trial run failed: {}", report.error.clone().unwrap_or_default()));
+            return Err(format!(
+                "the source's trial run failed: {}",
+                report.error.clone().unwrap_or_default()
+            ));
         }
         let removed = Arc::new(AtomicBool::new(false));
         {
@@ -410,7 +466,9 @@ impl Shared {
                 return;
             }
             let mut state = self.lock();
-            let Some(entry) = state.sources.get_mut(name) else { return };
+            let Some(entry) = state.sources.get_mut(name) else {
+                return;
+            };
             let health = &mut entry.health;
             health.runs += 1;
             health.last_run_ms = Some(started);
@@ -460,8 +518,17 @@ impl Shared {
             let now_us = now_ms() * 1000;
             let result = self.jaeger.services().and_then(|services| {
                 let mut spans = Vec::new();
-                for service in services {
-                    spans.extend(self.jaeger.traces(&service, now_us.saturating_sub(lookback_us), now_us + 60_000_000, 500)?);
+                // Jaeger's own spans, should its self-tracing be on.
+                for service in services
+                    .into_iter()
+                    .filter(|s| s != "jaeger" && s != "jaeger-all-in-one")
+                {
+                    spans.extend(self.jaeger.traces(
+                        &service,
+                        now_us.saturating_sub(lookback_us),
+                        now_us + 60_000_000,
+                        500,
+                    )?);
                 }
                 Ok(spans)
             });
@@ -527,9 +594,15 @@ impl Shared {
     /// Everything the browser shows, raw: the human's own data.
     pub fn viewer_state(&self) -> Value {
         let names = self.flow_names();
-        let flows: Vec<Value> = names.iter().filter_map(|n| self.flow_view(n, false)).collect();
+        let flows: Vec<Value> = names
+            .iter()
+            .filter_map(|n| self.flow_view(n, false))
+            .collect();
         let state = self.lock();
-        let traces = state.store.summaries(&dashr_core::store::Filter { limit: Some(300), ..Default::default() });
+        let traces = state.store.summaries(&dashr_core::store::Filter {
+            limit: Some(300),
+            ..Default::default()
+        });
         json!({
             "version": state.version(),
             "info": self.info,
@@ -551,7 +624,10 @@ impl Shared {
 
     pub fn status(&self) -> Value {
         let names = self.flow_names();
-        let flows: Vec<Value> = names.iter().filter_map(|n| self.flow_view(n, true)).collect();
+        let flows: Vec<Value> = names
+            .iter()
+            .filter_map(|n| self.flow_view(n, true))
+            .collect();
         let sources = self.sources_view();
         let state = self.lock();
         json!({
@@ -594,7 +670,12 @@ pub fn iso(ms: u64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 #[cfg(test)]
@@ -605,6 +686,9 @@ mod tests {
     fn iso_times() {
         assert_eq!(iso(0), "1970-01-01T00:00:00Z");
         assert_eq!(iso(1_790_582_953_928), "2026-09-28T08:09:13Z");
-        assert_eq!(dashr_core::ingest::rfc3339_ns(&iso(1_790_582_953_000)), Some(1_790_582_953_000_000_000));
+        assert_eq!(
+            dashr_core::ingest::rfc3339_ns(&iso(1_790_582_953_000)),
+            Some(1_790_582_953_000_000_000)
+        );
     }
 }
