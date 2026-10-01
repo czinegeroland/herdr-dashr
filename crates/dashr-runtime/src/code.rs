@@ -129,7 +129,8 @@ pub fn resolve(root: &Path, requested: &str) -> Result<PathBuf, Error> {
     }
     let given = Path::new(requested);
     let mut tries: Vec<PathBuf> = Vec::new();
-    if given.is_absolute() {
+    // `has_root`: on Windows `/app/x.cs` is rooted but not absolute.
+    if given.has_root() {
         tries.push(given.to_path_buf());
         let parts: Vec<_> = given
             .components()
