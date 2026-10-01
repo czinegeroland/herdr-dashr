@@ -1,451 +1,203 @@
-//! Starting and stopping a pane-owned Grafana.
+//! Running sessions, as records in the state directory (DASHR-SESSION-002).
+//!
+//! A session is one pane (or one `dashr serve`) with its Jaeger container
+//! and its API. The record tells `dashr` commands — run by the human's AI
+//! session from any pane — where the API is and the token it needs. It is
+//! written owner-only and removed when the session ends.
 
-use std::collections::BTreeMap;
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
 
-use dashr_aws::cli::AwsCli;
-use dashr_aws::{Inventory, PipelineRef};
-use dashr_core::config::{Config, DEFAULT_IMAGE, DatasourceKind};
-use dashr_core::session::{Otlp, SessionRecord, SessionStore};
-use dashr_core::{dashboard, ids, provisioning};
-use dashr_docker::{Docker, DockerError, Flavor, RunSpec};
-use dashr_grafana::{Client, GrafanaError};
+use serde::{Deserialize, Serialize};
 
-use crate::paths;
+use crate::docker::Ports;
 
-/// Who owns a session.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Identity {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionRecord {
     pub session_id: String,
+    /// The Herdr pane, when the session runs in one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
-    pub socket_hash: Option<String>,
+    pub pid: u32,
+    pub api_port: u16,
+    /// Sent by `dashr` commands; the viewer has a token of its own.
+    pub agent_token: String,
+    pub container: String,
+    pub ports: Ports,
+    /// Where Jaeger's ports are published.
+    pub bind: String,
+    pub started_ms: u64,
 }
 
-impl Identity {
-    /// A session owned by a Herdr pane.
-    pub fn herdr(socket_path: &str, pane_id: &str) -> Self {
-        Self {
-            session_id: ids::session_id(socket_path, pane_id),
-            pane_id: Some(pane_id.to_owned()),
-            socket_hash: Some(ids::socket_hash(socket_path)),
+impl SessionRecord {
+    pub fn api_url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.api_port)
+    }
+
+    fn host(&self) -> &str {
+        if self.bind == "0.0.0.0" || self.bind == "::" { "127.0.0.1" } else { &self.bind }
+    }
+
+    pub fn otlp_http(&self) -> String {
+        format!("http://{}:{}", self.host(), self.ports.otlp_http)
+    }
+
+    pub fn otlp_grpc(&self) -> String {
+        format!("http://{}:{}", self.host(), self.ports.otlp_grpc)
+    }
+
+    pub fn jaeger_ui(&self) -> String {
+        format!("http://127.0.0.1:{}", self.ports.ui)
+    }
+}
+
+pub struct Registry {
+    dir: PathBuf,
+}
+
+impl Registry {
+    pub fn new(state_dir: &Path) -> Self {
+        Self { dir: state_dir.join("sessions") }
+    }
+
+    fn path(&self, session_id: &str) -> PathBuf {
+        let safe: String = session_id
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .collect();
+        self.dir.join(format!("{safe}.json"))
+    }
+
+    pub fn save(&self, record: &SessionRecord) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        let path = self.path(&record.session_id);
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, serde_json::to_vec_pretty(record).unwrap_or_default())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))?;
         }
+        std::fs::rename(temporary, path)
     }
 
-    /// A session started by hand, outside Herdr.
-    pub fn standalone(name: &str) -> Self {
-        Self {
-            session_id: format!("local-{}", ids::sanitize(name)),
-            pane_id: None,
-            socket_hash: None,
+    pub fn remove(&self, session_id: &str) {
+        let _ = std::fs::remove_file(self.path(session_id));
+    }
+
+    /// Every record, newest first.
+    pub fn list(&self) -> Vec<SessionRecord> {
+        let mut out: Vec<SessionRecord> = std::fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|e| e == "json"))
+            .filter_map(|entry| serde_json::from_slice(&std::fs::read(entry.path()).ok()?).ok())
+            .collect();
+        out.sort_by(|a: &SessionRecord, b| b.started_ms.cmp(&a.started_ms));
+        out
+    }
+
+    /// The session `selector` names (its id or its pane id); without one,
+    /// the only session `alive` accepts, else the newest.
+    pub fn find(&self, selector: Option<&str>, alive: impl Fn(&SessionRecord) -> bool) -> Result<SessionRecord, String> {
+        let records = self.list();
+        if let Some(selector) = selector.filter(|s| !s.is_empty()) {
+            return records
+                .into_iter()
+                .find(|r| r.session_id == selector || r.pane_id.as_deref() == Some(selector))
+                .ok_or_else(|| format!("no dashr session {selector:?}; `dashr sessions` lists them"));
         }
+        let live: Vec<SessionRecord> = records.into_iter().filter(|r| alive(r)).collect();
+        live.into_iter()
+            .next()
+            .ok_or_else(|| "no dashr session is running: open the trace pane first (see `dashr --help`)".to_owned())
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum StartError {
-    #[error("{0}")]
-    Docker(#[from] DockerError),
-    #[error("could not prepare runtime files: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Grafana did not start: {0}")]
-    Grafana(#[from] GrafanaError),
-    #[error("the OpenTelemetry endpoint did not start: {0}")]
-    Otlp(String),
-    #[error("{0}")]
-    Session(#[from] dashr_core::session::SessionError),
-}
-
-/// A started session.
-#[derive(Debug)]
-pub struct Started {
-    pub record: SessionRecord,
-    /// Whether runtime files are on a memory-backed file system.
-    pub in_memory: bool,
-    /// The pipeline bootstrap, when a pipeline was given.
-    pub inventory: Option<Result<Inventory, String>>,
-    pub warnings: Vec<String>,
-}
-
-pub fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
-}
-
-/// Environment values the container needs, by name, from this process's
-/// environment and from exported AWS credentials.
-fn resolve_secrets(
-    config: &Config,
-    env_names: &[String],
-    has_cloudwatch: bool,
-    aws: Option<&AwsCli>,
-    warnings: &mut Vec<String>,
-) -> BTreeMap<String, String> {
-    let mut secrets = BTreeMap::new();
-    for name in env_names {
-        match std::env::var(name) {
-            Ok(value) if !value.is_empty() => {
-                secrets.insert(name.clone(), value);
-            }
-            _ => warnings.push(format!(
-                "{name} is not set; datasources that reference it will fail to authenticate"
-            )),
-        }
-    }
-    if has_cloudwatch {
-        let exported = aws.map(AwsCli::export_credentials);
-        match exported {
-            Some(Ok(credentials)) if !credentials.is_empty() => secrets.extend(credentials),
-            other => {
-                // Fall back to credentials already in the environment.
-                let mut found = false;
-                for name in dashr_aws::cli::CREDENTIAL_VARS {
-                    if let Ok(value) = std::env::var(name)
-                        && !value.is_empty()
-                    {
-                        secrets.insert((*name).to_owned(), value);
-                        found = true;
-                    }
-                }
-                if !found {
-                    let reason = match other {
-                        Some(Err(error)) => error.to_string(),
-                        _ => "no credentials exported".to_owned(),
-                    };
-                    let profile = config.aws.profile.as_deref().unwrap_or("default");
-                    warnings.push(format!(
-                        "CloudWatch has no AWS credentials ({reason}); run `aws sso login --profile {profile}` and reopen"
-                    ));
-                }
-            }
-        }
-    }
-    secrets
-}
-
-fn write_provisioning(runtime_dir: &Path, contents: &str) -> std::io::Result<std::path::PathBuf> {
-    let root = runtime_dir.join("provisioning");
-    let datasources = root.join("datasources");
-    std::fs::create_dir_all(&datasources)?;
-    std::fs::write(datasources.join("dashr.yaml"), contents)?;
-    // Grafana runs as uid 472 inside the container and reads this bind
-    // mount directly. The file holds env references, never values, and the
-    // enclosing runtime directory stays 0700 on the host.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755))?;
-        std::fs::set_permissions(&datasources, std::fs::Permissions::from_mode(0o755))?;
-        std::fs::set_permissions(
-            datasources.join("dashr.yaml"),
-            std::fs::Permissions::from_mode(0o644),
-        )?;
-    }
-    Ok(root)
-}
-
-/// Writes a file the container user can read through a bind mount.
-fn write_readable(path: &Path, contents: &str) -> std::io::Result<()> {
-    std::fs::write(path, contents)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))?;
-    }
-    Ok(())
-}
-
-/// Starts Grafana for a session and pushes a first dashboard.
-pub fn start(
-    config: &Config,
-    identity: &Identity,
-    pipeline: Option<&PipelineRef>,
-    store: &SessionStore,
-    docker: &Docker,
-    aws: Option<&AwsCli>,
-) -> Result<Started, StartError> {
-    docker.available()?;
-    let mut warnings = Vec::new();
-    let (runtime_dir, in_memory) = paths::create_runtime_dir(&identity.session_id)?;
-    if !in_memory {
-        warnings.push(format!(
-            "no memory-backed directory; runtime files are in {} and deleted on close",
-            runtime_dir.display()
-        ));
-    }
-
-    let extra: Vec<_> = pipeline
-        .map(|pipeline| vec![provisioning::cloudwatch_for_region(&pipeline.region)])
-        .unwrap_or_default();
-    let provisioned = provisioning::build(config, &extra);
-    if config.otel.enabled {
-        for datasource in &config.datasources {
-            let uid = datasource.effective_uid();
-            if dashr_core::config::OTEL_DATASOURCE_UIDS.contains(&uid.as_str()) {
-                warnings.push(format!(
-                    "datasource {} is not provisioned in OpenTelemetry mode: its uid {uid} is the image's own; give it another uid",
-                    datasource.name
-                ));
-            }
-        }
-    }
-    let written = write_provisioning(&runtime_dir, &provisioned.datasources_file).and_then(|dir| {
-        if config.otel.enabled {
-            write_readable(
-                &dir.join(dashr_docker::TEMPO_CONFIG_NAME),
-                dashr_docker::OTEL_TEMPO_CONFIG,
-            )?;
-        }
-        Ok(dir)
-    });
-    let provisioning_dir = match written {
-        Ok(dir) => dir,
-        Err(error) => {
-            paths::remove_runtime_dir(&runtime_dir);
-            return Err(error.into());
-        }
-    };
-    let has_cloudwatch = config
-        .datasources
-        .iter()
-        .any(|datasource| datasource.kind == DatasourceKind::Cloudwatch)
-        || pipeline.is_some();
-    let secrets = resolve_secrets(
-        config,
-        &provisioned.env_names,
-        has_cloudwatch,
-        aws,
-        &mut warnings,
-    );
-
-    if config.needs_custom_image() && config.grafana.image == DEFAULT_IMAGE && !config.otel.enabled
-    {
-        warnings.push(
-            "Seq and Zabbix datasources need the custom image: run `dashr image build` and set grafana.image"
-                .to_owned(),
+/// `n` random bytes as hex, from the operating system where it offers them.
+pub fn random_hex(n: usize) -> String {
+    let mut bytes = vec![0u8; n];
+    let filled = std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut bytes))
+        .is_ok();
+    if !filled {
+        // Windows: no /dev/urandom. Mix the clock, the process and an
+        // address; tokens only guard loopback ports against other local
+        // users, and are never reused across sessions.
+        let seed = format!(
+            "{:?}{}{:p}",
+            std::time::SystemTime::now(),
+            std::process::id(),
+            &bytes
         );
-    }
-
-    let container = ids::container_name(&identity.session_id);
-    let mut labels = BTreeMap::new();
-    labels.insert(dashr_docker::LABEL_OWNER.to_owned(), "1".to_owned());
-    labels.insert(
-        dashr_docker::LABEL_SESSION.to_owned(),
-        identity.session_id.clone(),
-    );
-    if let Some(pane) = &identity.pane_id {
-        labels.insert(dashr_docker::LABEL_PANE.to_owned(), pane.clone());
-    }
-    if let Some(hash) = &identity.socket_hash {
-        labels.insert(dashr_docker::LABEL_SOCKET.to_owned(), hash.clone());
-    }
-    // OpenTelemetry mode swaps the image for one that also runs a collector,
-    // Loki, Tempo and Prometheus: still one container per pane (DASHR-OTEL-001).
-    let otel = config.otel.enabled;
-    let (flavor, image, memory, refresh) = if otel {
-        (
-            Flavor::OtelLgtm,
-            config.otel.image.clone(),
-            config.otel.memory.clone(),
-            config.otel.refresh.clone(),
-        )
-    } else {
-        (
-            Flavor::Grafana,
-            config.grafana.image.clone(),
-            config.grafana.memory.clone(),
-            config.grafana.refresh.clone(),
-        )
-    };
-    let spec = RunSpec {
-        name: container.clone(),
-        image,
-        flavor,
-        labels,
-        memory,
-        provisioning_dir,
-        env: RunSpec::grafana_env(),
-        inherit_env: secrets.keys().cloned().collect(),
-        host_gateway: cfg!(target_os = "linux"),
-    };
-
-    // A container left by a crash of this very pane would hold the name.
-    let _ = docker.stop(&container);
-    let cleanup = |error: StartError| {
-        let _ = docker.stop(&container);
-        paths::remove_runtime_dir(&runtime_dir);
-        error
-    };
-    docker
-        .start(&spec, &secrets)
-        .map_err(|e| cleanup(e.into()))?;
-    let port = docker.port(&container).map_err(|e| cleanup(e.into()))?;
-    let client = Client::local(&format!("http://127.0.0.1:{port}"));
-    client
-        .wait_healthy(Duration::from_secs(config.grafana.startup_timeout_secs))
-        .map_err(|e| cleanup(e.into()))?;
-    let otlp = if otel {
-        let otlp = Otlp {
-            grpc_port: docker
-                .mapped_port(&container, 4317)
-                .map_err(|e| cleanup(e.into()))?,
-            http_port: docker
-                .mapped_port(&container, 4318)
-                .map_err(|e| cleanup(e.into()))?,
-        };
-        crate::otlp::Exporter::new(&otlp.http_endpoint())
-            .wait_ready(Duration::from_secs(config.grafana.startup_timeout_secs))
-            .map_err(|e| cleanup(StartError::Otlp(e)))?;
-        Some(otlp)
-    } else {
-        None
-    };
-
-    let record = SessionRecord {
-        session_id: identity.session_id.clone(),
-        pane_id: identity.pane_id.clone(),
-        socket_hash: identity.socket_hash.clone(),
-        container: container.clone(),
-        port,
-        dashboard_uid: ids::dashboard_uid(&identity.session_id),
-        chat_pane: None,
-        runtime_dir: runtime_dir.clone(),
-        refresh,
-        datasources: provisioned.policies,
-        pipeline: pipeline.map(|p| format!("{} ({})", p.name, p.region)),
-        otlp,
-        started_unix: now_unix(),
-    };
-    store.save(&record).map_err(|e| cleanup(e.into()))?;
-
-    let mut inventory = None;
-    let first = match (pipeline, aws) {
-        (Some(pipeline), Some(aws)) => match aws.discover(pipeline) {
-            Ok(found) => {
-                let proposal = dashr_aws::propose::propose(
-                    &found,
-                    &provisioning::cloudwatch_uid(&pipeline.region),
-                );
-                inventory = Some(Ok(found));
-                proposal
-            }
-            Err(error) => {
-                let message = error.to_string();
-                inventory = Some(Err(message.clone()));
-                dashboard::welcome(
-                    &pipeline.name,
-                    &format!(
-                        "Could not inspect pipeline `{}`: {}\n\nAsk the agent below to build the dashboard by hand.",
-                        pipeline.name,
-                        dashr_core::masking::Masker::new(&config.masking).mask_text(&message)
-                    ),
-                )
-            }
-        },
-        _ if otel => {
-            let otlp = record.otlp.unwrap_or(Otlp {
-                grpc_port: 0,
-                http_port: 0,
-            });
-            dashboard::otel_welcome(&otlp.http_endpoint(), &otlp.grpc_endpoint())
+        let mut state = dashr_core::model::fnv1a64(seed.as_bytes());
+        for byte in &mut bytes {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *byte = state as u8;
         }
-        _ => dashboard::welcome(
-            "dashr",
-            "A disposable Grafana owned by this pane. Nothing is stored; it stops when the pane closes.\n\nAsk the agent below for the dashboard you need.",
-        ),
-    };
-    if let Err(error) = crate::apply::apply(
-        &record,
-        &client,
-        None,
-        &config.grafana.time_from,
-        &first,
-        "initial dashboard",
-    ) {
-        warnings.push(format!("first dashboard not applied: {error}"));
     }
-
-    Ok(Started {
-        record,
-        in_memory,
-        inventory,
-        warnings,
-    })
+    dashr_core::model::hex(&bytes)
 }
 
-/// Stops a session's Grafana and deletes everything it had on disk.
-pub fn stop(
-    record: &SessionRecord,
-    docker: &Docker,
-    store: &SessionStore,
-) -> Result<(), DockerError> {
-    let result = docker.stop(&record.container);
-    paths::remove_runtime_dir(&record.runtime_dir);
-    store.remove(&record.session_id);
-    result
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn identities() {
-        let herdr = Identity::herdr("/run/h.sock", "w1:p2");
-        assert!(herdr.session_id.ends_with("-w1-p2"));
-        assert_eq!(herdr.pane_id.as_deref(), Some("w1:p2"));
-        assert_eq!(herdr.socket_hash.as_deref().map(str::len), Some(8));
-        assert_eq!(Identity::standalone("My Test").session_id, "local-my-test");
-    }
-
-    #[test]
-    fn missing_secret_env_is_a_warning_not_a_leak() {
-        let mut warnings = Vec::new();
-        let secrets = resolve_secrets(
-            &Config::default(),
-            &["DASHR_TEST_SURELY_UNSET_VAR".to_owned()],
-            false,
-            None,
-            &mut warnings,
-        );
-        assert!(secrets.is_empty());
-        assert!(warnings[0].contains("DASHR_TEST_SURELY_UNSET_VAR"));
-    }
-
-    #[test]
-    fn provisioning_is_readable_by_the_container_user() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = write_provisioning(dir.path(), "{}").unwrap();
-        let file = root.join("datasources/dashr.yaml");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
-                0o644
-            );
+    fn record(id: &str, pane: Option<&str>, started: u64) -> SessionRecord {
+        SessionRecord {
+            session_id: id.into(),
+            pane_id: pane.map(str::to_owned),
+            pid: 1,
+            api_port: 1234,
+            agent_token: "t".into(),
+            container: format!("dashr-{id}"),
+            ports: Ports { otlp_grpc: 4317, otlp_http: 4318, ui: 16686 },
+            bind: "127.0.0.1".into(),
+            started_ms: started,
         }
     }
 
     #[test]
-    fn start_fails_cleanly_without_docker() {
+    fn records_are_found_by_id_pane_or_liveness() {
         let dir = tempfile::tempdir().unwrap();
-        let store = SessionStore::new(dir.path());
-        let result = start(
-            &Config::default(),
-            &Identity::standalone("nodocker"),
-            None,
-            &store,
-            &Docker::new("definitely-not-docker-xyz"),
-            None,
-        );
-        assert!(matches!(
-            result,
-            Err(StartError::Docker(DockerError::Missing { .. }))
-        ));
-        assert!(store.list().is_empty());
+        let registry = Registry::new(dir.path());
+        registry.save(&record("a", Some("w1:p2"), 1)).unwrap();
+        registry.save(&record("b", None, 2)).unwrap();
+        assert_eq!(registry.find(Some("w1:p2"), |_| true).unwrap().session_id, "a");
+        assert_eq!(registry.find(None, |_| true).unwrap().session_id, "b", "newest first");
+        assert_eq!(registry.find(None, |r| r.session_id == "a").unwrap().session_id, "a");
+        assert!(registry.find(None, |_| false).unwrap_err().contains("no dashr session"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join("sessions/a.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        registry.remove("a");
+        assert_eq!(registry.list().len(), 1);
+    }
+
+    #[test]
+    fn tokens_are_random_hex() {
+        let (a, b) = (random_hex(16), random_hex(16));
+        assert_eq!(a.len(), 32);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn endpoints() {
+        let mut r = record("a", None, 1);
+        assert_eq!(r.otlp_http(), "http://127.0.0.1:4318");
+        r.bind = "0.0.0.0".into();
+        assert_eq!(r.otlp_grpc(), "http://127.0.0.1:4317");
     }
 }

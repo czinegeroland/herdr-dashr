@@ -9,17 +9,10 @@ publish = false
 
 [dependencies]
 dashr-core.workspace = true
-dashr-grafana.workspace = true
-dashr-docker.workspace = true
-dashr-herdr.workspace = true
-dashr-aws.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
-signal-hook.workspace = true
-tungstenite.workspace = true
+flate2.workspace = true
 ureq.workspace = true
-sysinfo.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

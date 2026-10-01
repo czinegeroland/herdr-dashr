@@ -1,24 +1,17 @@
-//! Pure building blocks shared by every other dashr crate.
-//!
-//! Nothing in this crate performs I/O beyond reading and writing the small
-//! session files in [`session`]. Configuration, masking, dashboard
-//! validation, Grafana frame handling and watch evaluation are all functions
-//! of their inputs, which is what lets the privacy guarantees be unit tested
-//! without a Grafana or a Docker daemon.
+//! dashr's core: spans from any tracing system in one shape, the session's
+//! trace store, flows (expected traces) and their verdicts, sequence
+//! diagrams, and the masking that keeps personal data from the agent. No
+//! I/O: the runtime crate feeds it.
 
-pub mod collect;
 pub mod config;
-pub mod dashboard;
-pub mod dbperf;
-pub mod frames;
-pub mod ids;
-pub mod library;
-pub mod logx;
-pub mod masking;
-pub mod otlp;
-pub mod provisioning;
-pub mod session;
-pub mod shell;
-pub mod watch;
+pub mod flow;
+pub mod ingest;
+pub mod model;
+pub mod privacy;
+pub mod sequence;
+pub mod store;
 
 pub use config::Config;
+pub use flow::{Flow, Verdict};
+pub use model::Span;
+pub use store::TraceStore;

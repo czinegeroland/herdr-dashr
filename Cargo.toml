@@ -2,17 +2,13 @@
 resolver = "3"
 members = [
     "crates/dashr-core",
-    "crates/dashr-grafana",
-    "crates/dashr-docker",
     "crates/dashr-herdr",
-    "crates/dashr-aws",
     "crates/dashr-runtime",
-    "crates/dashr-mcp",
     "crates/dashr-cli",
 ]
 
 [workspace.package]
-version = "1.1.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -20,12 +16,8 @@ repository = "https://github.com/czinegeroland/herdr-dashr"
 
 [workspace.dependencies]
 dashr-core = { path = "crates/dashr-core" }
-dashr-grafana = { path = "crates/dashr-grafana" }
-dashr-docker = { path = "crates/dashr-docker" }
 dashr-herdr = { path = "crates/dashr-herdr" }
-dashr-aws = { path = "crates/dashr-aws" }
 dashr-runtime = { path = "crates/dashr-runtime" }
-dashr-mcp = { path = "crates/dashr-mcp" }
 
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
@@ -33,15 +25,13 @@ serde_json = "1"
 toml = "1"
 regex = "1"
 thiserror = "2"
-# Blocking HTTP: the plugin talks to one local Grafana and, on promote, one
-# remote one. An async runtime would buy nothing here (decision DEC-007).
+# Blocking HTTP client: `dashr` talks to its own session on loopback. An
+# async runtime would buy nothing here (DEC-007).
 ureq = { version = "3", features = ["json"] }
+# OTLP exporters may gzip their requests (OTEL_EXPORTER_OTLP_COMPRESSION).
+flate2 = "1"
 signal-hook = "0.4"
-# Drives terminal-browser's Chromium over the DevTools protocol (DEC-024).
-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 tempfile = "3"
-# Host and process CPU, memory, disk and network for the collectors (DEC-043).
-sysinfo = { version = "0.38", default-features = false, features = ["system", "disk", "network"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
