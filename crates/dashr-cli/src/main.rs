@@ -95,6 +95,21 @@ enum Command {
         #[command(subcommand)]
         command: FlowCommand,
     },
+    /// A report to attach to a pull request (masked): a flow's verdict and its trace.
+    Export {
+        /// The flow to report (default: the first flow; its verdict's trace).
+        #[arg(long)]
+        flow: Option<String>,
+        /// The trace to report (default: the flow's, else the newest).
+        #[arg(long)]
+        trace: Option<String>,
+        /// md (GitHub renders the Mermaid diagram), html or json.
+        #[arg(long, default_value = "md", value_parser = ["md", "html", "json"])]
+        format: String,
+        /// Write to this file instead of stdout.
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+    },
     /// Pull sources: commands that fetch traces from wherever the services run.
     Source {
         #[command(subcommand)]
@@ -291,6 +306,19 @@ fn run(cli: Cli) -> agent::Outcome {
             limit,
         } => agent::traces(&paths, session, since, service, name, attrs, errors, limit),
         Command::Trace { id, json } => agent::trace(&paths, session, &id, json),
+        Command::Export {
+            flow,
+            trace,
+            format,
+            out,
+        } => agent::export(
+            &paths,
+            session,
+            flow.as_deref(),
+            trace.as_deref(),
+            &format,
+            out.as_deref(),
+        ),
         Command::Spans { command } => match command {
             Some(SpansCommand::Set { file }) => agent::spans_set(&paths, session, &file),
             None => agent::spans_list(&paths, session),

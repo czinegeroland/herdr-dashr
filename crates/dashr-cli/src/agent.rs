@@ -199,6 +199,40 @@ pub fn spans_set(paths: &Paths, session: Option<&str>, file: &Path) -> Outcome {
     Ok(0)
 }
 
+/// `dashr export`: a report for a pull request (masked), on stdout or
+/// into a file.
+pub fn export(
+    paths: &Paths,
+    session: Option<&str>,
+    flow: Option<&str>,
+    trace: Option<&str>,
+    format: &str,
+    out: Option<&Path>,
+) -> Outcome {
+    let mut query = vec![format!("format={}", encode(format))];
+    if let Some(flow) = flow {
+        query.push(format!("flow={}", encode(flow)));
+    }
+    if let Some(trace) = trace {
+        query.push(format!("trace={}", encode(trace)));
+    }
+    let answer = connect(paths, session)?.get(&format!("export?{}", query.join("&")))?;
+    let text = match answer {
+        Value::String(text) => text,
+        other => serde_json::to_string_pretty(&other).unwrap_or_default() + "\n",
+    };
+    match out {
+        Some(path) => {
+            std::fs::write(path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
+            print(
+                &json!({"written": path.display().to_string(), "bytes": text.len(), "format": format}),
+            );
+        }
+        None => print!("{text}"),
+    }
+    Ok(0)
+}
+
 /// `dashr spans`: every span the code has, planned and observed (masked).
 pub fn spans_list(paths: &Paths, session: Option<&str>) -> Outcome {
     print(&connect(paths, session)?.get("spans")?);

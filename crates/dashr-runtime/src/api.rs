@@ -96,6 +96,35 @@ fn filter(request: &Request) -> Result<Filter, Response> {
     Ok(filter)
 }
 
+/// `?flow=&trace=&format=md|html|json`.
+fn export(shared: &Arc<Shared>, request: &Request, masked: bool) -> Response {
+    let query = |key: &str| {
+        request
+            .query
+            .get(key)
+            .map(String::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    let report = match shared.report(query("flow"), query("trace"), masked) {
+        Ok(report) => report,
+        Err(error) => return Response::error(404, &error),
+    };
+    match query("format").unwrap_or("md") {
+        "md" | "markdown" => Response::text(
+            200,
+            "text/markdown; charset=utf-8",
+            dashr_core::report::markdown(&report),
+        ),
+        "html" => Response::text(
+            200,
+            "text/html; charset=utf-8",
+            dashr_core::report::html(&report),
+        ),
+        "json" => Response::json(200, &serde_json::to_value(&report).unwrap_or_default()),
+        other => Response::error(400, &format!("format {other:?}: md, html or json")),
+    }
+}
+
 fn agent(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
     match (request.method.as_str(), parts) {
         ("GET", ["status"]) => Response::json(200, &shared.status()),
@@ -149,6 +178,8 @@ fn agent(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
             }
         }
         ("GET", ["spans"]) => Response::json(200, &shared.spans_for_agent()),
+        // The agent's export is always masked (DASHR-PRIV-001).
+        ("GET", ["export"]) => export(shared, request, true),
         ("PUT", ["catalog"]) => {
             let text = String::from_utf8_lossy(&request.body);
             let cwd = request.query.get("cwd").map(String::as_str);
@@ -213,6 +244,12 @@ fn viewer(shared: &Arc<Shared>, request: &Request, parts: &[&str]) -> Response {
             None => Response::error(404, "no such trace"),
         },
         ("GET", ["spans"]) => Response::json(200, &shared.spans_for_viewer()),
+        // Masked unless the human asks for raw values.
+        ("GET", ["export"]) => export(
+            shared,
+            request,
+            request.query.get("raw").is_none_or(|v| v != "1"),
+        ),
         ("GET", ["code"]) => {
             let path = request.query.get("path").map(String::as_str).unwrap_or("");
             match code::read(shared.code_root().as_deref(), path) {

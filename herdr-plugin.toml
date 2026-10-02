@@ -3,17 +3,17 @@
 
 id = "herdr-dashr"
 name = "herdr-dashr"
-version = "2.0.1"
+version = "2.0.2"
 min_herdr_version = "0.9.0"
 description = "End-to-end testing by traces: your AI agent instruments a feature with OpenTelemetry, you browse and edit the code behind every span, and every service's spans — local, AWS X-Ray, Azure, Google Cloud, Jaeger, Zipkin — meet in one live sequence diagram the agent checks against the expected flow."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["cmd", "/c", "npm", "install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@2.0.1"]
+command = ["cmd", "/c", "npm", "install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@2.0.2"]
 platforms = ["windows"]
 
 [[build]]
-command = ["npm", "install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@2.0.1"]
+command = ["npm", "install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "herdr-dashr@2.0.2"]
 platforms = ["linux", "macos"]
 
 [[build]]
