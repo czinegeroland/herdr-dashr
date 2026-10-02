@@ -174,6 +174,19 @@ spans, and the run's sequence as text. Report to the human in plain words:
 what passed, what failed, where, and your diagnosis. When a step fails,
 look at the trace (`dashr trace <id>`) before guessing.
 
+## 7. Attach the result to the pull request
+
+```bash
+dashr export --flow checkout -o dashr-checkout.md          # the PR description or a comment
+dashr export --flow checkout --format html -o report.html  # a standalone page to attach
+```
+
+The Markdown has the verdict, a table of the steps, and the run's sequence
+as a Mermaid diagram that GitHub draws, with the text sequence folded
+below. Everything in it is masked. Offer it when the human opens or
+updates the pull request for the feature; the human can also export from
+the viewer's Export menu.
+
 Pulled sources deliver late (X-Ray indexes within seconds to a minute):
 `dashr flow wait` waits until the trace has been quiet for the flow's
 `settle_secs`.

@@ -10,9 +10,9 @@
 | npm package | `herdr-dashr` |
 | Repository | `czinegeroland/herdr-dashr` |
 | Document status | Active |
-| PRD version | 2.0.1 |
-| Delivery phase | v2.0.1 — trace sessions, pull sources, flows checked against runs, live sequence diagrams, and a Spans tab that opens and edits the code behind every span |
-| Last updated | 2026-10-01T21:36:18Z |
+| PRD version | 2.0.2 |
+| Delivery phase | v2.0.2 — trace sessions, pull sources, flows checked against runs, live sequence diagrams, a Spans tab that opens and edits the code behind every span, reports for pull requests, and a light or dark viewer |
+| Last updated | 2026-10-02T06:09:26Z |
 | Product owner | @czinegeroland |
 
 ## Living PRD policy
@@ -143,6 +143,7 @@ sequence diagram.
 |---|---|---|
 | 2.0 | Everything in section 8 | Delivered |
 | 2.0.1 | The pane's link fits on one line; the review step is gone; the Spans tab with a code editor | Delivered |
+| 2.0.2 | Light and dark themes and a redesigned viewer; span times on hover; reports for pull requests (Markdown with Mermaid, HTML, JSON) | Delivered |
 | Later | A session per test environment shared by a team; traces exported for bug reports; more formats (Datadog, Honeycomb) as converters | Not started |
 
 ## 8. Functional requirements
@@ -194,6 +195,9 @@ sequence diagram.
 | DASHR-VIEW-003 | The viewer also shows a waterfall, the trace list (newest first, followed by default), sources' health, span details on click (raw), and a link to the trace in Jaeger. | Should | Verified | `crates/dashr-runtime/assets/viewer.html`; AC-VIEW |
 | DASHR-VIEW-004 | The agent gets the same sequence as text: offsets, nesting, arrows, durations, errors with masked messages, masked attributes. | Must | Verified | `text_for_the_agent_is_masked`; AC-OTLP |
 | DASHR-VIEW-005 | The viewer's Spans tab lists every span the code has, grouped by service: the spans the agent's catalog and flows name (shown even before a run produces them, as "not seen") and every span the traces hold, each with where it is made (from the catalog, a flow step's `code`, or OpenTelemetry's `code.*` attributes), how often it was seen, errors, last duration, last attributes (raw) and expected attributes not seen. Span details in the sequence and code links in the Flow tab open the same place. | Must | Verified | `the_inventory_joins_catalog_flows_and_traces`, `code_references`; AC-SPANS |
+| DASHR-VIEW-007 | The viewer offers light, dark and system themes (a switch in the header, remembered in the browser, applied before the first paint, the code editor following it), with a redesigned layout: endpoint chips that copy on click, a live indicator, stat tiles for the trace, duration bars in the trace list, a waterfall time axis. | Should | Verified | `crates/dashr-runtime/assets/viewer.html`; AC-THEME |
+| DASHR-VIEW-008 | Hovering a span in the waterfall or an arrow in the sequence shows how long it ran, its start and end offsets, its kind and share of its parent, and its error. | Should | Verified | AC-THEME |
+| DASHR-VIEW-009 | The viewer's Export menu copies a Markdown report or saves it, an HTML report or JSON, for the selected flow or trace; masked unless the human ticks "include raw values". | Must | Verified | AC-EXPORT |
 | DASHR-VIEW-006 | Clicking a span opens its file in a VS Code-style editor (Monaco, loaded from jsDelivr; a plain editor when offline) at the span's line, found by the function's name when no line is given. The human edits and saves (Save or Ctrl+S); a file changed on disk since it was opened is not overwritten (409) and an unmodified editor follows changes on disk; "Open in VS Code" opens the same line in the desktop editor. | Must | Verified | `saves_are_atomic_and_refuse_stale_versions`, `functions_are_found_at_their_definition`; AC-SPANS |
 
 ### 8.6 Agent integration (AGENT)
@@ -203,6 +207,7 @@ sequence diagram.
 | DASHR-AGENT-001 | `dashr wait` waits for a session (by pane id) and prints its endpoints and the `OTEL_*` environment; `dashr env` prints that environment for sh, PowerShell, cmd or JSON. | Must | Verified | AC-SESSION, AC-HERDR |
 | DASHR-AGENT-002 | Every command answers JSON (the trace sequence as text), errors on stderr, with documented exit codes (0, 1 failed, 2 usage, 4 timeout, 5 error). | Must | Verified | `the_command_line_parses`; AC-FLOW |
 | DASHR-AGENT-004 | `dashr spans set <catalog.json>` records the spans the agent added (service, span, kind, file, line or function, why, attribute keys) and makes the directory it runs in (or the catalog's `root`) the code root; `dashr flow set` sets the code root too until a catalog names one. `dashr spans` lists the inventory with span names and attribute values masked. `dashr status` lists the files the human saved in the viewer (`human_edits`). | Must | Verified | `invalid_catalogs_are_refused`; AC-SPANS |
+| DASHR-AGENT-005 | `dashr export [--flow] [--trace] [--format md\|html\|json] [-o file]` writes a report to attach to a pull request: the flow's verdict and a table of its steps (with code locations, problems and durations), the trace's summary, the sequence as a Mermaid diagram GitHub draws and as text; HTML is a standalone page; JSON adds the spans. The agent's export is always masked. | Must | Verified | `mermaid_draws_calls_returns_and_errors_masked`, `markdown_and_html_carry_the_verdict`, `labels_cannot_break_the_diagram`; AC-EXPORT |
 | DASHR-AGENT-003 | The agent skill, installed for every coding agent by the plugin's build step, teaches the workflow — open the pane, check prerequisites and ask the human for what is missing, instrument, list the spans with their code locations, write the flow, connect sources, arm, run, judge, and respect the human's edits — with references on instrumenting per language and platform, flows, and pull-source recipes for X-Ray, Application Insights, Log Analytics, Cloud Trace, Jaeger, Tempo and Zipkin. | Must | Implemented | `.agents/skills/herdr-dashr/SKILL.md`, `reference/instrumenting.md`, `reference/flows.md`, `reference/sources.md` |
 
 ### 8.7 Herdr integration (HERDR)
@@ -275,6 +280,7 @@ file's history before 2.0.
 | DEC-054 | No review step (2.0.1). Approving a flow before a run added a wait the human did not want: they would rather see the spans and the code behind them, and change it themselves. A flow is the agent's expectation, used as soon as it is set; DEC-049's link between plan and test stays (the flow's `code` and `why` show in the Flow and Spans tabs). |
 | DEC-055 | The viewer token is 12 hex characters, so the pane's link (`http://127.0.0.1:<port>/#<token>`, 36 characters) fits on one line of the narrow pane: a wrapped link was only half clickable. The port is loopback-only and the token is fresh per session; guessing 48 bits over loopback is impractical. The agent token stays 128-bit. |
 | DEC-056 | The viewer's editor is Monaco from jsDelivr, not bundled: it keeps the binary small and the viewer a single file. Offline, a plain text editor edits and saves the same way. The code root comes from the agent (the catalog's `root` or the directory it runs dashr in), because only it knows which repository the feature lives in. |
+| DEC-057 | Reports for pull requests are Markdown with a Mermaid sequence diagram: GitHub renders it in descriptions and comments, so the PR shows the run without an attachment or an image host. The HTML report draws the same Mermaid source (from jsDelivr) and falls back to the text sequence offline. Reports are built in `dashr-core` so the agent's and the viewer's exports are the same document; only masking differs (DASHR-PRIV-001). |
 | DEC-053 | Jaeger's self-tracing is switched off (`OTEL_TRACES_SAMPLER=always_off`): it traced every poll of its query API. The poller also ignores a `jaeger` service. Found while testing against a real Jaeger. |
 
 ## 13. Open questions and risks
@@ -327,6 +333,8 @@ file's history before 2.0.
 
 | 2026-10-01 | 2.0.1: the pane's viewer link fits on one line and is clickable whole (DEC-055); the approve / request changes review is removed from the viewer, the API, `flow wait` and the pane (DEC-054); new Spans tab: every span the code has, planned and observed, opening its code in an editor the human can save from, confined to the code root (DEC-056); `dashr spans [set]`; human edits reported to the agent. | FLOW-002, VIEW-001, VIEW-005, VIEW-006, AGENT-002, AGENT-003, AGENT-004, HERDR-003, SEC-001, SEC-006 |
 
+| 2026-10-02 | 2.0.2: a light / dark / system theme switch and a redesigned viewer (DASHR-VIEW-007); span times on hover in the waterfall and sequence (DASHR-VIEW-008); reports for pull requests from `dashr export` and the viewer's Export menu — Markdown with a Mermaid diagram, standalone HTML, JSON — masked for the agent and by default (DEC-057). The end-to-end suite now waits for `status: running` from Herdr: `herdr status server` exits 0 when the server is not running, which made AC-HERDR race the server's start. | VIEW-007, VIEW-008, VIEW-009, AGENT-005 |
+
 ### Requirement completion summary
 
 | Area | Total | Verified | Implemented | Other |
@@ -335,12 +343,12 @@ file's history before 2.0.
 | TRACE | 4 | 4 | 0 | 0 |
 | SOURCE | 3 | 3 | 0 | 0 |
 | FLOW | 5 | 4 | 0 | 1 rejected |
-| VIEW | 6 | 6 | 0 | 0 |
-| AGENT | 4 | 3 | 1 | 0 |
+| VIEW | 9 | 9 | 0 | 0 |
+| AGENT | 5 | 4 | 1 | 0 |
 | HERDR | 5 | 3 | 2 | 0 |
 | TECH/GOV | 6 | 6 | 0 | 0 |
 | PRIV/SEC | 8 | 8 | 0 | 0 |
-| **All** | 47 | 43 | 3 | 1 |
+| **All** | 51 | 47 | 3 | 1 |
 
 ## 15. Acceptance criteria
 
@@ -351,6 +359,8 @@ Each is a scenario of `scripts/e2e/run.sh`.
 - **AC-MASK** The agent's trace list and trace show a pseudonym where the customer's email is; the viewer shows the real address.
 - **AC-FLOW** A flow is used as soon as it is set (no review state, `flow wait` before a run times out with exit 4 and `--review` is not an option); a changed flow is taken and armed again; resending the same flow keeps its arming.
 - **AC-SPANS** `dashr spans set` from the repository makes it the code root and the agent's `dashr spans` lists planned spans (one not seen yet) with names masked; in Chrome, the Spans tab lists them by service, opens a span's code at its function, the human edits and saves it with Ctrl+S, the file on disk changes and `dashr status` reports the edit; a stale save is refused with 409; paths outside the root (`..`, absolute, a symlink) are refused; the viewer token is required.
+- **AC-EXPORT** `dashr export` writes the failing flow as Markdown (verdict heading, step table, Mermaid diagram), HTML and JSON, with no email or card number in any; the viewer's export is masked by default and raw with `raw=1`, needs the viewer token, and its Export menu saves the HTML report.
+- **AC-THEME** In Chrome, the theme switch makes the page dark and light and remembers the choice; hovering a waterfall bar shows the span's duration, start and end.
 - **AC-VIEW** In Chrome, a correct run passes 5/5 with the sequence; a broken run (too many items, a card number recorded) fails with each step's reason and no card number in the output; the viewer shows the failure and draws the sequence.
 - **AC-SOURCE** A pull source printing `batch-get-traces` output for a Step Functions run (ten Lambdas, an ECS task, DynamoDB) joins the local trace under the event that started it; the trial reports counts only; the failing Lambda's error is masked; the spans reach Jaeger; a failing source is refused with its reason, `--keep-on-error` keeps one, `rm` removes them.
 - **AC-FORMATS** Zipkin, Jaeger, Application Insights and Cloud Trace exports import with `dashr ingest`, recognised by shape; an unknown document is refused.

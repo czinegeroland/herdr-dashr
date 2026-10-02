@@ -9,6 +9,7 @@ pub mod flow;
 pub mod ingest;
 pub mod model;
 pub mod privacy;
+pub mod report;
 pub mod sequence;
 pub mod store;
 

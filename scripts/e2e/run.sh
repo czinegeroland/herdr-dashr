@@ -7,7 +7,7 @@
 #   scripts/e2e/run.sh [path/to/dashr]
 #
 # Scenarios: AC-SESSION, AC-OTLP, AC-MASK, AC-FLOW, AC-SOURCE, AC-FORMATS,
-# AC-VIEW, AC-SPANS, AC-HERDR, AC-REAP, AC-DOCTOR and AC-LAUNCHER.
+# AC-VIEW, AC-SPANS, AC-EXPORT, AC-THEME, AC-HERDR, AC-REAP, AC-DOCTOR and AC-LAUNCHER.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -288,6 +288,40 @@ wait_for 5 "js 'document.getElementById(\"code-state\").textContent' | grep -q s
 shot 5-spans-saved
 ok "spans set makes the repository the code root; the Spans tab lists planned and seen spans, opens the code at the function ($EDITOR_KIND editor) and saves with Ctrl+S; the agent sees the edit; stale saves and paths outside the root are refused"
 
+log "AC-EXPORT: a report to attach to a pull request, masked"
+"${D[@]}" export --flow checkout -o "$WORK/report.md" >/dev/null || fail "dashr export (markdown) failed"
+grep -q '^## ❌ dashr: `checkout` failed' "$WORK/report.md" && grep -q '^```mermaid' "$WORK/report.md" && grep -q 'sequenceDiagram' "$WORK/report.md" \
+  || { cat "$WORK/report.md"; fail "the markdown report lacks the verdict or the diagram"; }
+grep -q '| ❌ | api | orders-api | POST /orders |' "$WORK/report.md" || { cat "$WORK/report.md"; fail "the markdown report lacks the steps"; }
+"${D[@]}" export --flow checkout --format html -o "$WORK/report.html" >/dev/null || fail "dashr export (html) failed"
+grep -q '<!doctype html>' "$WORK/report.html" && grep -q 'class="mermaid"' "$WORK/report.html" || fail "the html report is not a page with the diagram"
+"${D[@]}" export --format json >"$WORK/report.json" || fail "dashr export (json) failed"
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["masked"] and r["verdict"]["flow"] == "checkout" and r["spans"], r.keys()' "$WORK/report.json" || fail "the json report is incomplete"
+grep -lE 'ann@example.com|4111111111111111' "$WORK/report.md" "$WORK/report.html" "$WORK/report.json" && fail "the agent's export leaked personal data"
+curl -s "${V[@]}" "$API/v/export?flow=checkout&format=json" | grep -q 'ann@example.com' && fail "the viewer's default export is not masked"
+curl -s "${V[@]}" "$API/v/export?flow=checkout&format=json&raw=1" | grep -q 'ann@example.com' || fail "the viewer's raw export does not carry the real values"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$API/v/export?format=md")" = 401 ] || fail "the export is readable without the viewer token"
+js 'document.querySelector("[data-tab=flow]").click(), 1' >/dev/null
+sleep 1
+js 'document.getElementById("export-btn").click(), document.getElementById("export-pop").hidden ? 0 : 1' | grep -q 1 || fail "the export menu does not open"
+js 'document.querySelector("[data-export=html]").click(), 1' >/dev/null
+wait_for 10 "js 'document.getElementById(\"toast\").textContent' | grep -q 'Saved dashr-checkout.html'" || fail "exporting HTML from the viewer did not save a file"
+ok "dashr export writes markdown (verdict table, Mermaid diagram), HTML and JSON, masked; the viewer exports masked by default, raw on request, from its Export menu"
+
+log "AC-THEME: dark mode, a waterfall that tells each span's time"
+js 'document.querySelector("#theme [data-theme=dark]").click(), document.documentElement.dataset.theme' | grep -q dark || fail "the dark theme was not applied"
+wait_for 5 "js 'getComputedStyle(document.body).backgroundColor' | grep -q 'rgb(13, 15, 20)'" || fail "the page did not turn dark"
+js 'localStorage.getItem("dashr-theme")' | grep -q dark || fail "the theme choice is not remembered"
+js "selectedTrace = '$TRACE', document.getElementById('follow').checked = false, setTab('waterfall'), 1" >/dev/null
+wait_for 10 "js 'document.querySelectorAll(\".wf-row\").length' | grep -qv '^0$'" || fail "the waterfall has no rows"
+js 'const r = document.querySelector(".wf-row"), b = r.getBoundingClientRect(); r.dispatchEvent(new MouseEvent("mousemove", { clientX: b.left + b.width / 2, clientY: b.top + 5, bubbles: true })); document.getElementById("tip").hidden ? "hidden" : document.getElementById("tip").textContent' >"$WORK/tip.txt"
+grep -q 'start' "$WORK/tip.txt" && grep -qE '[0-9.]+ (ms|s)' "$WORK/tip.txt" || { cat "$WORK/tip.txt"; fail "hovering a waterfall bar does not show its time"; }
+shot 6-dark-waterfall
+js 'document.querySelector("#theme [data-theme=light]").click(), 1' >/dev/null
+wait_for 5 "js 'getComputedStyle(document.body).backgroundColor' | grep -q 'rgb(244, 245, 248)'" || fail "the light theme was not applied"
+js 'document.querySelector("#theme [data-theme=auto]").click(), 1' >/dev/null
+ok "the theme switch turns the viewer dark or light and remembers it; hovering a span shows how long it ran, its start and end"
+
 log "AC-SOURCE: a pull source joins a Step Functions run (X-Ray) to the local trace"
 TRACE3="$(drive r-3 2 ann@example.com | json 'd["trace_id"]')"
 wait_for 20 "dashr_ trace $TRACE3 --json | grep -q 'orders publish'" || fail "the third trace did not arrive"
@@ -357,7 +391,8 @@ ok "the startup hook removed the orphaned Jaeger and the stale record"
 log "AC-HERDR: the AI session opens the trace pane in Herdr; closing it removes everything"
 herdr server >"$WORK/herdr.log" 2>&1 &
 PIDS+=("$!")
-wait_for 20 herdr status server || fail "herdr server did not start"
+# `herdr status server` exits 0 when not running too: wait for the word.
+wait_for 30 "herdr status server | grep -q '^status: running'" || { cat "$WORK/herdr.log"; fail "herdr server did not start"; }
 herdr workspace create --label e2e --cwd "$WORK" >/dev/null
 herdr plugin link "$ROOT" >/dev/null
 HSTATE="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-dashr"

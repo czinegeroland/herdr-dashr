@@ -36,10 +36,15 @@ as one trace and tells you which step failed, where, and why.
    `missing`, `out of order`, `mismatch` (wrong values, retries, a card
    number that must not be recorded), `error` or `slow` — live in your
    browser, as JSON for the agent.
+6. **Attach.** `dashr export` (or the viewer's Export menu) turns the
+   verdict and the run's sequence into Markdown for the pull request —
+   GitHub draws the Mermaid diagram — or a standalone HTML page.
 
 ![The Spans tab: every span the code has, grouped by service; clicking one opens its code at the line that makes it, editable and saved from the browser](https://raw.githubusercontent.com/czinegeroland/herdr-dashr/main/docs/images/spans.png)
 
 ![The Flow tab: the steps the agent expects, with code locations, and the verdict of a failing run](https://raw.githubusercontent.com/czinegeroland/herdr-dashr/main/docs/images/flow.png)
+
+![The viewer in dark mode: a trace's waterfall with stat tiles, and the time of the hovered span](https://raw.githubusercontent.com/czinegeroland/herdr-dashr/main/docs/images/dark.png)
 
 ## Quickstart
 
@@ -61,7 +66,8 @@ Without Herdr: `npm install -g herdr-dashr`, then `dashr serve`.
 - A **Jaeger** container per pane, receiving OTLP on `4317` (gRPC) and
   `4318` (HTTP), on loopback, read-only, in memory. Close the pane and every
   span is gone.
-- A **live viewer**: sequence diagram, waterfall, flow verdicts, the spans
+- A **live viewer**, light or dark: sequence diagram, waterfall (hover a
+  span for its duration, start and end), flow verdicts, the spans
   inventory with a code editor, sources' health, span details, and a link
   to the same trace in Jaeger's UI. The editor reads and writes only files
   under the repository the agent works in.
@@ -80,6 +86,7 @@ dashr wait --session <pane>       wait for a session; print endpoints and OTEL_*
 dashr env                         export OTEL_* for a local service
 dashr spans [set catalog.json]    every span the code has; set where each is made
 dashr flow set|list|show|arm|wait|rm
+dashr export [--flow F] [--trace T] [--format md|html|json] [-o FILE]
 dashr source add|list|rm
 dashr traces [--since 10m] [--service S] [--attr k=v] [--errors]
 dashr trace <id> [--json]

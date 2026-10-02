@@ -717,6 +717,103 @@ impl Shared {
         Some(json!({"summary": summary, "spans": spans, "sequence": sequence::build(&spans)}))
     }
 
+    /// A report to attach to a pull request: a flow's verdict with the
+    /// trace it judged, or a trace alone. `masked` is always true for the
+    /// agent (DASHR-EXPORT-001).
+    pub fn report(
+        &self,
+        flow: Option<&str>,
+        trace: Option<&str>,
+        masked: bool,
+    ) -> Result<dashr_core::report::Report, String> {
+        use dashr_core::report::{Mask, Report, mermaid};
+        let (flow_entry, verdict) = {
+            let state = self.lock();
+            let name = match flow {
+                Some(name) => Some(name.to_owned()),
+                // Without a flow or a trace: the first flow, if any.
+                None if trace.is_none() => state.flows.keys().next().cloned(),
+                None => None,
+            };
+            match name {
+                Some(name) => {
+                    let entry = state
+                        .flows
+                        .get(&name)
+                        .ok_or_else(|| format!("no flow {name:?}"))?;
+                    let verdict = self.verdict_locked(&state, entry, now_ms());
+                    (Some(entry.flow.clone()), Some(verdict))
+                }
+                None => (None, None),
+            }
+        };
+        let trace_id = trace
+            .map(str::to_owned)
+            .or_else(|| verdict.as_ref().and_then(|v| v.trace_id.clone()))
+            .or_else(|| {
+                let state = self.lock();
+                let newest = state.store.summaries(&dashr_core::store::Filter {
+                    limit: Some(1),
+                    ..Default::default()
+                });
+                newest.first().map(|s| s.trace_id.clone())
+            });
+        let state = self.lock();
+        let spans = trace_id.as_deref().and_then(|id| state.store.trace(id));
+        let summary = trace_id.as_deref().and_then(|id| state.store.summary(id));
+        drop(state);
+        if trace.is_some() && spans.is_none() {
+            return Err(format!("no trace {}", trace.unwrap_or_default()));
+        }
+        if flow_entry.is_none() && spans.is_none() {
+            return Err("nothing to export yet: no flow and no trace".into());
+        }
+        let masker = masked.then_some(&self.masker);
+        let mut mask = Mask::new(masker);
+        let mut summary = summary;
+        if let Some(summary) = summary.as_mut() {
+            summary.root = mask.text(&summary.root);
+        }
+        let title = match (&flow_entry, &summary) {
+            (Some(flow), _) => flow.name.clone(),
+            (None, Some(summary)) => summary.root.clone(),
+            _ => "trace".into(),
+        };
+        let raw_masker;
+        let sequence_masker = match masker {
+            Some(masker) => masker,
+            None => {
+                let mut config = self.config.masking.clone();
+                config.enabled = false;
+                raw_masker = Masker::new(&config);
+                &raw_masker
+            }
+        };
+        let spans_json = spans.as_ref().map(|spans| {
+            if masked {
+                trace_id
+                    .as_deref()
+                    .and_then(|id| self.trace_for_agent(id))
+                    .map(|t| t["spans"].clone())
+                    .unwrap_or_default()
+            } else {
+                serde_json::to_value(spans).unwrap_or_default()
+            }
+        });
+        Ok(Report {
+            title,
+            generated: iso(now_ms()),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            masked,
+            mermaid: spans.as_deref().map(|s| mermaid(s, &mut mask)),
+            sequence: spans.as_deref().map(|s| sequence::text(s, sequence_masker)),
+            summary,
+            flow: flow_entry,
+            verdict,
+            spans: spans_json,
+        })
+    }
+
     pub fn status(&self) -> Value {
         let names = self.flow_names();
         let flows: Vec<Value> = names
